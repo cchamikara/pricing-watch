@@ -7,7 +7,9 @@ authors = [
     { name = "Chamal", email = "chamalchamikara@gmail.com" }
 ]
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "numpy>=2.5.4",
+]
 
 [dependency-groups]
 dev = ["ruff", "mypy", "pytest", "hypothesis", "pre-commit"]
@@ -25,7 +27,22 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "TID"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
-# banned-api entries (wall clock, random) arrive with M0.4.
+
+# Simulation code must read time from the injected SimClock and randomness from pricing_watch.rng.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"datetime.datetime.now".msg = "Use the injected SimClock."
+"datetime.datetime.utcnow".msg = "Use the injected SimClock."
+"datetime.datetime.today".msg = "Use the injected SimClock."
+"datetime.date.today".msg = "Use the injected SimClock."
+"time.time".msg = "Use the injected SimClock."
+"time.time_ns".msg = "Use the injected SimClock."
+"random".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.seed".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.default_rng".msg = "Use pricing_watch.rng.rng_for."
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["TID251"]
+"src/pricing_watch/rng.py" = ["TID251"]
 
 [tool.mypy]
 strict = true
