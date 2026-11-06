@@ -36,6 +36,8 @@ def lint_src(code: str) -> subprocess.CompletedProcess[str]:
         "import random\n",
         "from random import choice\n",
         "import numpy as np\nnp.random.default_rng()\n",
+        "import numpy as np\nnp.random.normal()\n",
+        "import uuid\nuuid.uuid4()\n",
     ],
 )
 def test_wall_clock_and_random_rejected_in_src(code: str) -> None:

@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy>=2.5.4",
+    "sqlalchemy>=2.1.8",
 ]
 
 [dependency-groups]
@@ -39,6 +40,17 @@ ban-relative-imports = "all"
 "random".msg = "Use pricing_watch.rng.rng_for."
 "numpy.random.seed".msg = "Use pricing_watch.rng.rng_for."
 "numpy.random.default_rng".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.random".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.rand".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.randn".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.randint".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.normal".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.uniform".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.choice".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.shuffle".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.permutation".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.poisson".msg = "Use pricing_watch.rng.rng_for."
+"uuid.uuid4".msg = "Derive IDs from scenario and seed."
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["TID251"]
