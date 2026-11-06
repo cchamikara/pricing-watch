@@ -14,51 +14,52 @@ PROMO_LOCK_SHARE = 0.1
 @dataclass(frozen=True)
 class CategoryProfile:
     prefix: str
-    cost_dollars: tuple[float, float]
     markup: tuple[float, float]  # shelf price ex GST / cost
     floor_pct: tuple[int, int]
     lead_hours: tuple[int, int]
     elasticity: tuple[float, float]
     daily_demand: tuple[float, float]
-    nouns: tuple[str, ...]
+    products: tuple[tuple[str, tuple[float, float]], ...]  # (name, cost range in dollars)
 
 
 PROFILES = {
     # TVs: thin margins, price-sensitive, slow, imported. Keep min markup above max floor.
     "tvs": CategoryProfile(
         "TV",
-        (400, 3000),
         (1.15, 1.30),
         (5, 10),
         (336, 672),
         (-3.5, -2.0),
         (0.3, 3),
-        ('55" 4K TV', '65" OLED TV', '75" QLED TV'),
+        (('55" 4K TV', (400, 900)), ('65" OLED TV', (1500, 3000)), ('75" QLED TV', (1200, 2800))),
     ),
     "audio": CategoryProfile(
         "AUD",
-        (50, 600),
         (1.3, 1.8),
         (15, 25),
         (168, 504),
         (-3.0, -1.5),
         (1, 8),
-        ("wireless headphones", "soundbar", "bluetooth speaker"),
+        (
+            ("wireless headphones", (80, 400)),
+            ("soundbar", (150, 600)),
+            ("bluetooth speaker", (50, 250)),
+        ),
     ),
-    # Accessories: high margin, fast, cheap, short lead times.
+    # Accessories: high margin, fast, cheap, short lead times. Elasticity stays below -1 so a
+    # SKU with no competitor can't gain margin forever by raising its price.
     "accessories": CategoryProfile(
         "ACC",
-        (5, 60),
         (2.0, 3.5),
         (30, 50),
         (72, 168),
-        (-1.5, -0.5),
+        (-2.0, -1.1),
         (5, 25),
-        ("HDMI cable", "TV wall mount", "USB-C charger"),
+        (("HDMI cable", (5, 25)), ("TV wall mount", (25, 60)), ("USB-C charger", (10, 40))),
     ),
 }
 # Invented brands and suppliers; never use real retailer or brand names.
-BRANDS = ("Kairo", "Veltro", "Nordwave", "Sonik", "Aurex")
+BRANDS = ("Kairo", "Veltro", "Nordwave", "Quillo", "Brevant")
 SUPPLIERS = ("Pacific AV Distribution", "Harbour Electronics Trade", "Meridian Imports")
 
 
@@ -83,12 +84,12 @@ def generate_catalogue(seed: int, start: datetime) -> list[CatalogueItem]:
     items = []
     for category, p in PROFILES.items():
         for n in range(1, SKUS_PER_CATEGORY + 1):
-            cost = Cents(round(rng.uniform(*p.cost_dollars) * 100))
+            noun, cost_dollars = p.products[rng.integers(len(p.products))]
+            cost = Cents(round(rng.uniform(*cost_dollars) * 100))
             ex_price = cost * rng.uniform(*p.markup)
             # shelf prices end in .95, like a real store
             price = int(round(inc_from_ex(Cents(round(ex_price))) / 100)) * 100 - 5
             brand = BRANDS[rng.integers(len(BRANDS))]
-            noun = p.nouns[rng.integers(len(p.nouns))]
             supplier = SUPPLIERS[rng.integers(len(SUPPLIERS))]
             locked = rng.random() < PROMO_LOCK_SHARE
             items.append(
