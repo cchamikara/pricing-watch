@@ -1,6 +1,6 @@
 # pricing-watch
 
-An autonomous pricing agent for a simulated lighting store, plus the layer that watches, scores and constrains it.
+An autonomous pricing agent for a simulated home entertainment retailer, plus the layer that watches, scores and constrains it.
 
 ## Setup
 
