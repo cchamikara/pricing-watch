@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from pricing_watch.models import InboundOrder, Product, SalesTick, StockLevel
 
 FORECAST_WINDOW = timedelta(days=7)
+MIN_HISTORY_HOURS = 24
 
 
 def reorder(s: Session, sku: str, qty: int, t: datetime) -> InboundOrder:
@@ -34,13 +35,16 @@ def receive_arrivals(s: Session, t: datetime) -> list[InboundOrder]:
 
 
 def forecast_daily_demand(s: Session, sku: str, t: datetime) -> float:
-    """Average daily demand over the 7 days before t, scaled from the hours recorded so far."""
+    """Average daily demand over the 7 days before t, or 0 (no forecast) before a full day.
+
+    Demand is uneven across the day, so scaling a partial day up to 24 h misleads by up to 4x.
+    """
     demanded, hours = s.execute(
         select(func.sum(SalesTick.units_sold + SalesTick.lost_units), func.count())
         .where(SalesTick.sku == sku)
         .where(SalesTick.sim_time >= t - FORECAST_WINDOW, SalesTick.sim_time < t)
     ).one()
-    return float(demanded * 24 / hours) if hours else 0.0
+    return float(demanded * 24 / hours) if hours >= MIN_HISTORY_HOURS else 0.0
 
 
 def days_of_cover(on_hand: int, forecast_daily: float) -> float:
