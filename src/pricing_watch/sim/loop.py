@@ -2,15 +2,15 @@
 
 Every tick runs the hooks in this fixed order, then advances the clock by one hour:
 
-1. faults: apply or revert scheduled faults
-2. competitor_feed: competitors publish (the hook itself decides every 6 h)
-3. demand: draw demand and record sales
-4. replenishment: inbound orders arrive
-5. repricer: the rules repricer reacts
-6. triggers: detect incident conditions
-7. incidents: handle open incidents
+1. competitor_feed: competitors publish (the hook itself decides every 6 h)
+2. demand: draw demand and record sales
+3. replenishment: inbound orders arrive
+4. repricer: the rules repricer reacts
+5. triggers: detect incident conditions
+6. incidents: handle open incidents
 
 Determinism depends on this order: each hook sees the state the earlier ones left.
+Faults need no hook: they filter observations where data is read (see sim/faults.py).
 """
 
 from collections.abc import Callable, Mapping
@@ -19,7 +19,6 @@ from datetime import datetime
 from pricing_watch.clock import TickClock
 
 HOOK_ORDER = (
-    "faults",
     "competitor_feed",
     "demand",
     "replenishment",
