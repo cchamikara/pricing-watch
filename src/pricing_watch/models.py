@@ -44,7 +44,7 @@ class CompetitorPrice(Base):
     __tablename__ = "competitor_price"
     id: Mapped[int] = mapped_column(primary_key=True)
     competitor_id: Mapped[str]
-    sku: Mapped[str] = mapped_column(ForeignKey("product.sku"))
+    sku: Mapped[str] = mapped_column(ForeignKey("product.sku"), index=True)
     price_inc_gst_cents: Mapped[int]
     published_at: Mapped[datetime]
     plausible: Mapped[bool]
