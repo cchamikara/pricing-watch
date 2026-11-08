@@ -1,7 +1,7 @@
 """Rules repricer and action executor: the baseline the agent is compared against.
 
 The repricer holds each price within a band of the cheapest plausible competitor price, never
-below the margin floor and never more than MAX_DAILY_STEP from the start-of-day price.
+below the margin floor and never more than the policy's daily step from the start-of-day price.
 Call it after a competitor publish; the executor writes the authoritative snapshot (S3).
 """
 
@@ -12,31 +12,20 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from pricing_watch.models import Action, CompetitorPrice, Product, Proposal
+from pricing_watch.money import ceil_div, floor_price
 from pricing_watch.tracing import Tracer
 
 BAND_PCT = (98, 102)  # target range as % of the cheapest plausible competitor price
-MAX_DAILY_STEP_PCT = 20
 
 
-def _ceil_div(a: int, b: int) -> int:
-    return -(-a // b)
-
-
-def floor_price(cost_ex_gst_cents: int, margin_floor_pct: int) -> int:
-    """Lowest shelf price (inc GST) whose ex-GST price meets cost x (1 + floor).
-
-    Solves ex_from_inc(p) >= x exactly under half-up rounding: p >= 1.1x - 0.55.
-    """
-    min_ex = _ceil_div(cost_ex_gst_cents * (100 + margin_floor_pct), 100)
-    return _ceil_div(22 * min_ex - 11, 20)
-
-
-def target_price(current: int, start_of_day: int, cheapest: int, floor: int) -> int | None:
+def target_price(
+    current: int, start_of_day: int, cheapest: int, floor: int, max_step_pct: int
+) -> int | None:
     """New shelf price, or None to leave it. Band first, then the daily step, then the floor."""
-    low, high = _ceil_div(cheapest * BAND_PCT[0], 100), cheapest * BAND_PCT[1] // 100
+    low, high = ceil_div(cheapest * BAND_PCT[0], 100), cheapest * BAND_PCT[1] // 100
     target = min(max(current, low), high)
-    step_low = _ceil_div(start_of_day * (100 - MAX_DAILY_STEP_PCT), 100)
-    step_high = start_of_day * (100 + MAX_DAILY_STEP_PCT) // 100
+    step_low = ceil_div(start_of_day * (100 - max_step_pct), 100)
+    step_high = start_of_day * (100 + max_step_pct) // 100
     target = max(min(max(target, step_low), step_high), floor)
     return None if target == current else target
 
@@ -92,7 +81,11 @@ def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Acti
 
 
 def reprice(
-    s: Session, tracer: Tracer, t: datetime, start_of_day: Mapping[str, int]
+    s: Session,
+    tracer: Tracer,
+    t: datetime,
+    start_of_day: Mapping[str, int],
+    max_step_pct: int,
 ) -> list[Action]:
     with tracer.observation("routine_reprice", "agent", {"sim_time": t.isoformat()}) as root:
         actions = []
@@ -104,7 +97,11 @@ def reprice(
                 continue
             floor = floor_price(product.cost_ex_gst_cents, product.margin_floor_pct)
             new_price = target_price(
-                product.price_inc_gst_cents, start_of_day[product.sku], cheapest, floor
+                product.price_inc_gst_cents,
+                start_of_day[product.sku],
+                cheapest,
+                floor,
+                max_step_pct,
             )
             if new_price is None:
                 continue

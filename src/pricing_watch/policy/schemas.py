@@ -1,9 +1,8 @@
 """Argument schemas for every action tool (rule P2). Anything not listed here is not a tool."""
 
-from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, NaiveDatetime, StrictInt, model_validator
 
 Sku = Annotated[str, Field(min_length=1, max_length=32)]
 Cents = Annotated[StrictInt, Field(gt=0)]
@@ -21,8 +20,8 @@ class PriceChange(_Args):
 class Promotion(_Args):
     skus: list[Sku] = Field(min_length=1, max_length=60)
     discount_pct: Annotated[StrictInt, Field(ge=1, le=90)]
-    start: datetime
-    end: datetime
+    start: NaiveDatetime  # sim times have no time zone; aware ones would crash comparisons
+    end: NaiveDatetime
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:

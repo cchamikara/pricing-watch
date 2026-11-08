@@ -7,6 +7,8 @@ from typing import Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from pricing_watch.sim.catalogue import PROFILES
+
 DEFAULT_PATH = Path(__file__).with_name("config.yaml")
 
 
@@ -23,6 +25,8 @@ class PolicyConfig(BaseModel):
     def _check(self) -> Self:
         if self.auto_apply_pct >= self.max_daily_step_pct:
             raise ValueError("auto_apply_pct must be below max_daily_step_pct")
+        if set(self.markdown_budget_cents) != set(PROFILES):
+            raise ValueError(f"markdown budgets must cover exactly {sorted(PROFILES)}")
         if any(v < 0 for v in self.markdown_budget_cents.values()):
             raise ValueError("markdown budgets must be non-negative")
         return self

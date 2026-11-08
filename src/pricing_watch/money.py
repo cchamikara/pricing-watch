@@ -30,3 +30,16 @@ def inc_from_ex(ex_gst: Cents) -> Cents:
     """GST-inclusive price from an ex-GST price."""
     _check(ex_gst)
     return Cents(_div_round_half_up(ex_gst * (100 + GST_RATE_PERCENT), 100))
+
+
+def ceil_div(a: int, b: int) -> int:
+    return -(-a // b)
+
+
+def floor_price(cost_ex_gst_cents: int, margin_floor_pct: int) -> int:
+    """Lowest shelf price (inc GST) whose ex-GST price meets cost x (1 + floor).
+
+    Solves ex_from_inc(p) >= x exactly under half-up rounding: p >= 1.1x - 0.55.
+    """
+    min_ex = ceil_div(cost_ex_gst_cents * (100 + margin_floor_pct), 100)
+    return ceil_div(22 * min_ex - 11, 20)

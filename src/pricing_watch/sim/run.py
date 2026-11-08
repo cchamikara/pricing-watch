@@ -3,7 +3,7 @@
 import hashlib
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from pricing_watch.models import (
     make_engine,
 )
 from pricing_watch.money import Cents, ex_from_inc
+from pricing_watch.policy.config import load_policy
 from pricing_watch.rng import rng_for
 from pricing_watch.sim.catalogue import generate_catalogue
 from pricing_watch.sim.competitors import make_competitors, publish
@@ -29,9 +30,10 @@ from pricing_watch.sim.scenario import ScenarioConfig
 from pricing_watch.sim.stock import days_of_cover, forecast_daily_demand, receive_arrivals, reorder
 from pricing_watch.tracing import NoopTracer, Tracer
 
-OPENING_STOCK_DAYS = 14
+OPENING_STOCK_DAYS = 14  # beyond the lead time, so the first reorder lands before running out
 REORDER_COVER_DAYS = 14  # order this many days of forecast demand
 SAFETY_DAYS = 7  # reorder when cover falls below lead time + this
+WARMUP_DAYS = 7  # quiet rules-mode history before the start, so forecasts work from tick one
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class Summary:
 
 def run_scenario(config: ScenarioConfig, tracer: Tracer | None = None) -> Summary:
     tracer = tracer or NoopTracer()
+    policy = load_policy()
     items = generate_catalogue(config.seed, config.start)
     competitors = make_competitors(config.seed, items)
     faults = config.fault_schedule()
@@ -63,15 +66,19 @@ def run_scenario(config: ScenarioConfig, tracer: Tracer | None = None) -> Summar
             )
         )
     s.flush()
-    opening = {i.sku: math.ceil(i.base_daily_demand * OPENING_STOCK_DAYS) for i in items}
-    s.add_all(StockLevel(sku=sku, on_hand=qty) for sku, qty in opening.items())
+    initial = {
+        i.sku: math.ceil(i.base_daily_demand * (i.lead_time_hours / 24 + OPENING_STOCK_DAYS))
+        for i in items
+    }
+    s.add_all(StockLevel(sku=sku, on_hand=qty) for sku, qty in initial.items())
     s.flush()
 
     products = {p.sku: p for p in s.scalars(select(Product))}
     stock = {st.sku: st for st in s.scalars(select(StockLevel))}
     cheapest: dict[str, int | None] = {i.sku: None for i in items}
     start_of_day: dict[str, int] = {}
-    received = dict.fromkeys(opening, 0)
+    opening: dict[str, int] = {}  # stock on hand when the scenario window starts
+    received = dict.fromkeys(initial, 0)
     stockout_hours = 0
     published = False
 
@@ -90,12 +97,14 @@ def run_scenario(config: ScenarioConfig, tracer: Tracer | None = None) -> Summar
 
     def demand(t: datetime) -> None:
         nonlocal stockout_hours
+        if t == config.start:
+            opening.update({sku: st.on_hand for sku, st in stock.items()})
         for i in items:
             price = products[i.sku].price_inc_gst_cents
             rate = hourly_rate(i, price, t, cheapest[i.sku])
             sold, lost = draw_sales(demand_rng, rate, stock[i.sku].on_hand)
             stock[i.sku].on_hand -= sold
-            stockout_hours += stock[i.sku].on_hand == 0
+            stockout_hours += t >= config.start and stock[i.sku].on_hand == 0
             s.add(
                 SalesTick(
                     sku=i.sku,
@@ -110,7 +119,8 @@ def run_scenario(config: ScenarioConfig, tracer: Tracer | None = None) -> Summar
 
     def replenishment(t: datetime) -> None:
         for order in receive_arrivals(s, t):
-            received[order.sku] += order.qty
+            if t >= config.start:
+                received[order.sku] += order.qty
         if t.hour:
             return
         inbound = dict(
@@ -128,11 +138,11 @@ def run_scenario(config: ScenarioConfig, tracer: Tracer | None = None) -> Summar
         if t.hour == 0 or not start_of_day:  # first tick may not be midnight
             start_of_day.update({sku: p.price_inc_gst_cents for sku, p in products.items()})
         if published:
-            reprice(s, tracer, t, start_of_day)
+            reprice(s, tracer, t, start_of_day, policy.max_daily_step_pct)
 
     run(
-        TickClock(config.start),
-        config.days * 24,
+        TickClock(config.start - timedelta(days=WARMUP_DAYS)),
+        (WARMUP_DAYS + config.days) * 24,
         {
             "competitor_feed": competitor_feed,
             "demand": demand,
@@ -141,14 +151,25 @@ def run_scenario(config: ScenarioConfig, tracer: Tracer | None = None) -> Summar
         },
     )
     s.commit()
-    return _summarise(s, opening, received, stockout_hours)
+    return _summarise(s, config.start, opening, received, stockout_hours)
 
 
 def _summarise(
-    s: Session, opening: dict[str, int], received: dict[str, int], stockout_hours: int
+    s: Session,
+    start: datetime,
+    opening: dict[str, int],
+    received: dict[str, int],
+    stockout_hours: int,
 ) -> Summary:
-    ticks = list(s.scalars(select(SalesTick).order_by(SalesTick.sim_time, SalesTick.sku)))
-    actions = list(s.scalars(select(Action).order_by(Action.id)))
+    """Summarise the scenario window only; the warm-up is left out."""
+    ticks = list(
+        s.scalars(
+            select(SalesTick)
+            .where(SalesTick.sim_time >= start)
+            .order_by(SalesTick.sim_time, SalesTick.sku)
+        )
+    )
+    actions = list(s.scalars(select(Action).where(Action.executed_at >= start).order_by(Action.id)))
     h = hashlib.sha256()
     for tick in ticks:
         h.update(f"{tick.sku}|{tick.sim_time}|{tick.units_sold}|{tick.lost_units}\n".encode())
@@ -161,7 +182,9 @@ def _summarise(
         gross_margin_ex_gst_cents=sum(t.revenue_ex_gst_cents - t.cogs_cents for t in ticks),
         stockout_sku_hours=stockout_hours,
         sell_through={
-            sku: sold.get(sku, 0) / (opening[sku] + received[sku]) for sku in sorted(opening)
+            # a SKU that sold out in the warm-up with nothing arriving had 0 units to sell
+            sku: sold.get(sku, 0) / max(opening[sku] + received[sku], 1)
+            for sku in sorted(opening)
         },
         fingerprint=h.hexdigest(),
     )
