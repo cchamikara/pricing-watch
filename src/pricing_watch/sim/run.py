@@ -125,7 +125,7 @@ def run_scenario(config: ScenarioConfig, tracer: Tracer | None = None) -> Summar
                 reorder(s, sku, math.ceil(forecast * REORDER_COVER_DAYS), t)
 
     def repricer(t: datetime) -> None:
-        if t.hour == 0:
+        if t.hour == 0 or not start_of_day:  # first tick may not be midnight
             start_of_day.update({sku: p.price_inc_gst_cents for sku, p in products.items()})
         if published:
             reprice(s, tracer, t, start_of_day)
