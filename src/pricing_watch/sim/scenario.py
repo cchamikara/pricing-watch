@@ -1,0 +1,39 @@
+"""Scenario config, loaded from scenarios/*.yaml. Fault times are hour offsets from the start."""
+
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, Field
+
+from pricing_watch.sim.faults import Fault, FaultKind
+
+
+class FaultConfig(BaseModel):
+    kind: FaultKind
+    start_hour: int = Field(ge=0)
+    hours: int = Field(gt=0)
+    sku: str | None = None
+
+
+class ScenarioConfig(BaseModel):
+    id: str
+    seed: int
+    days: int = Field(gt=0)
+    start: datetime
+    faults: list[FaultConfig] = []
+
+    def fault_schedule(self) -> list[Fault]:
+        return [
+            Fault(
+                f.kind,
+                self.start + timedelta(hours=f.start_hour),
+                self.start + timedelta(hours=f.start_hour + f.hours),
+                f.sku,
+            )
+            for f in self.faults
+        ]
+
+
+def load_scenario(path: Path) -> ScenarioConfig:
+    return ScenarioConfig.model_validate(yaml.safe_load(path.read_text()))
