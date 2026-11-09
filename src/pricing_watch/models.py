@@ -55,7 +55,8 @@ class Incident(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     kind: Mapped[str]
     category: Mapped[str]
-    sku: Mapped[str] = mapped_column(ForeignKey("product.sku"))
+    sku: Mapped[str | None] = mapped_column(ForeignKey("product.sku"))  # None: category-wide
+    suspect_skus: Mapped[list[str]] = mapped_column(default=list)  # flagged when it opened (P9)
     opened_at: Mapped[datetime]
     closed_at: Mapped[datetime | None]
     trace_id: Mapped[str]

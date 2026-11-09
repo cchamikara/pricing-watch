@@ -33,25 +33,33 @@ def target_price(
     return None if target == current else target
 
 
-def cheapest_plausible(s: Session, sku: str) -> int | None:
-    """Lowest of each competitor's latest price for the SKU, skipping implausible ones."""
+def latest_prices(s: Session, sku: str) -> list[CompetitorPrice]:
+    """Each competitor's most recent row for the SKU, plausible or not."""
     latest = (
         select(CompetitorPrice.competitor_id, func.max(CompetitorPrice.published_at).label("at"))
         .where(CompetitorPrice.sku == sku)
         .group_by(CompetitorPrice.competitor_id)
         .subquery()
     )
-    return s.scalar(
-        select(func.min(CompetitorPrice.price_inc_gst_cents))
-        .join(
-            latest,
-            and_(
-                CompetitorPrice.competitor_id == latest.c.competitor_id,
-                CompetitorPrice.published_at == latest.c.at,
-            ),
+    return list(
+        s.scalars(
+            select(CompetitorPrice)
+            .join(
+                latest,
+                and_(
+                    CompetitorPrice.competitor_id == latest.c.competitor_id,
+                    CompetitorPrice.published_at == latest.c.at,
+                ),
+            )
+            .where(CompetitorPrice.sku == sku)
+            .order_by(CompetitorPrice.competitor_id)
         )
-        .where(CompetitorPrice.sku == sku, CompetitorPrice.plausible)
     )
+
+
+def cheapest_plausible(s: Session, sku: str) -> int | None:
+    """Lowest of each competitor's latest price for the SKU, skipping implausible ones."""
+    return min((r.price_inc_gst_cents for r in latest_prices(s, sku) if r.plausible), default=None)
 
 
 def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Action:

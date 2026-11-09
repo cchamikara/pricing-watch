@@ -1,6 +1,6 @@
 """Competitor feed: two invented competitors that publish prices every 6 hours.
 
-- match_minus_5: prices 5% under our current shelf price, so it always undercuts.
+- match_minus_5: prices 5% under our current shelf price, down to its own floor (85% of list).
 - weekend_sale: holds a list price at or above our starting price, then cuts 15% on weekends.
 """
 
@@ -16,6 +16,7 @@ from pricing_watch.sim.catalogue import CatalogueItem
 PUBLISH_EVERY_HOURS = 6
 COVERAGE = 0.7  # share of our SKUs each competitor stocks
 WEEKEND_DISCOUNT = 0.15
+MATCH_FLOOR = 0.85  # match_minus_5 won't go below this share of its list price
 
 Strategy = Literal["match_minus_5", "weekend_sale"]
 
@@ -53,7 +54,8 @@ def publish(
         if item.sku not in competitor.skus:
             continue
         if competitor.strategy == "match_minus_5":
-            price = round(our_prices[item.sku] * 0.95)
+            list_price = competitor.skus[item.sku]
+            price = round(max(our_prices[item.sku] * 0.95, list_price * MATCH_FLOOR))
         else:
             price = round(competitor.skus[item.sku] * (1 - WEEKEND_DISCOUNT * weekend))
         rows.append(

@@ -5,7 +5,8 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pricing_watch.models import Action, Approval, Proposal
+from pricing_watch.agent.triggers import incident_context
+from pricing_watch.models import Action, Approval, Incident, Proposal
 from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.rules import DbStateView, IncidentContext, evaluate
 from pricing_watch.sim.repricer import execute
@@ -44,9 +45,10 @@ def decide(
     # its own trace, because the incident trace may already be closed
     with tracer.observation(f"approval_execute:{proposal_id}", "agent", {"reviewer": reviewer}):
         with tracer.observation(f"recheck:{proposal_id}", "guardrail", proposal.args) as obs:
-            # shortcut: no incident scope or suspect set yet; load them from the incident in M3
-            recheck = evaluate(proposal.tool, proposal.args, DbStateView(s, t),
-                               IncidentContext(), config, skip_approval=True)  # fmt: skip
+            incident = s.get(Incident, proposal.incident_id) if proposal.incident_id else None
+            ctx = incident_context(s, incident) if incident else IncidentContext()
+            recheck = evaluate(proposal.tool, proposal.args, DbStateView(s, t), ctx, config,
+                               skip_approval=True)  # fmt: skip
             obs.set_output({"decision": recheck.decision, "rule_ids": list(recheck.rule_ids),
                             "detail": recheck.detail, "checked": recheck.checked})  # fmt: skip
         if recheck.decision != "allowed":
