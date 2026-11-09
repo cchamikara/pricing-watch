@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from pricing_watch.models import PolicyDecision, Proposal
+from pricing_watch.models import Approval, PolicyDecision, Proposal
 from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.rules import Decision, IncidentContext, StateView, evaluate
 from pricing_watch.tracing import Tracer
@@ -39,6 +39,9 @@ def propose(
                 policy_version=decision.policy_version,
             )
         )
+        if decision.decision == "needs_approval":
+            s.add(Approval(proposal_id=proposal.id, status="pending", reviewer="",
+                           decided_at=None, note=""))  # fmt: skip
         s.flush()
         obs.set_output(
             {

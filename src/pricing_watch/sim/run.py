@@ -44,14 +44,16 @@ class Summary:
     fingerprint: str  # hash of every sales tick and price change, for determinism checks
 
 
-def run_scenario(config: ScenarioConfig, tracer: Tracer | None = None) -> Summary:
+def run_scenario(
+    config: ScenarioConfig, tracer: Tracer | None = None, db_url: str = "sqlite://"
+) -> Summary:
     tracer = tracer or NoopTracer()
     policy = load_policy()
     items = generate_catalogue(config.seed, config.start)
     competitors = make_competitors(config.seed, items)
     faults = config.fault_schedule()
     demand_rng = rng_for(config.seed, "demand")
-    s = Session(make_engine())
+    s = Session(make_engine(db_url))
     for i in items:
         s.add(
             Product(
