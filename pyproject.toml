@@ -1,13 +1,14 @@
 [project]
 name = "pricing-watch"
 version = "0.1.0"
-description = "An autonomous pricing agent for a simulated lighting store, plus the layer that watches, scores and constrains it."
+description = "An autonomous pricing agent for a simulated home entertainment retailer, plus the layer that watches, scores and constrains it."
 readme = "README.md"
 authors = [
     { name = "Chamal", email = "chamalchamikara@gmail.com" }
 ]
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "anthropic>=2.6.0",
     "numpy>=2.5.4",
     "pydantic>=2.14.3",
     "pyyaml>=6.0.3",
