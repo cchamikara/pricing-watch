@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from pricing_watch.approvals.queue import scripted_review
 from pricing_watch.clock import TickClock
 from pricing_watch.models import (
     Action,
@@ -78,7 +79,6 @@ def run_scenario(
     products = {p.sku: p for p in s.scalars(select(Product))}
     stock = {st.sku: st for st in s.scalars(select(StockLevel))}
     cheapest: dict[str, int | None] = {i.sku: None for i in items}
-    start_of_day: dict[str, int] = {}
     opening: dict[str, int] = {}  # stock on hand when the scenario window starts
     received = dict.fromkeys(initial, 0)
     stockout_hours = 0
@@ -137,10 +137,9 @@ def run_scenario(
                 reorder(s, sku, math.ceil(forecast * REORDER_COVER_DAYS), t)
 
     def repricer(t: datetime) -> None:
-        if t.hour == 0 or not start_of_day:  # first tick may not be midnight
-            start_of_day.update({sku: p.price_inc_gst_cents for sku, p in products.items()})
         if published:
-            reprice(s, tracer, t, start_of_day, policy.max_daily_step_pct)
+            reprice(s, tracer, t, policy)
+            scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all")
 
     run(
         TickClock(config.start - timedelta(days=WARMUP_DAYS)),

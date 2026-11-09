@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ class ScenarioConfig(BaseModel):
     days: int = Field(gt=0)
     start: datetime
     faults: list[FaultConfig] = []
+    reviewer: Literal["approve_all", "reject_all"] = "approve_all"  # scripted, same tick
 
     def fault_schedule(self) -> list[Fault]:
         return [

@@ -5,14 +5,17 @@ below the margin floor and never more than the policy's daily step from the star
 Call it after a competitor publish; the executor writes the authoritative snapshot (S3).
 """
 
-from collections.abc import Mapping
 from datetime import datetime
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from pricing_watch.models import Action, CompetitorPrice, Product, Proposal
+from pricing_watch.models import Action, CompetitorPrice, MarkdownLedger, Product, Proposal
 from pricing_watch.money import ceil_div, floor_price
+from pricing_watch.policy.config import PolicyConfig
+from pricing_watch.policy.decide import propose
+from pricing_watch.policy.rules import DbStateView, IncidentContext, markdown_cost_cents
+from pricing_watch.policy.schemas import parse_action
 from pricing_watch.tracing import Tracer
 
 BAND_PCT = (98, 102)  # target range as % of the cheapest plausible competitor price
@@ -52,10 +55,18 @@ def cheapest_plausible(s: Session, sku: str) -> int | None:
 
 
 def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Action:
-    """Apply an allowed proposal and record what the store looked like when it did."""
+    """Apply an allowed proposal, charge its markdown, and record what the store looked like."""
     with tracer.observation(f"execute:{proposal.tool}", "tool", proposal.args) as obs:
         if proposal.tool != "propose_price_change":
             raise ValueError(f"executor cannot run {proposal.tool!r} yet")
+        # before the price changes: the cost is measured from the current price
+        parsed = parse_action(proposal.tool, proposal.args)
+        for category, cost in markdown_cost_cents(parsed, DbStateView(s, t)).items():
+            row = s.get(MarkdownLedger, (category, t.date()))
+            if row is None:
+                row = MarkdownLedger(category=category, sim_day=t.date(), spent_cents=0)
+                s.add(row)
+            row.spent_cents += cost
         product = s.get_one(Product, proposal.args["sku"])
         new_price = int(proposal.args["new_price_inc_gst_cents"])
         snapshot = {
@@ -80,13 +91,9 @@ def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Acti
     return action
 
 
-def reprice(
-    s: Session,
-    tracer: Tracer,
-    t: datetime,
-    start_of_day: Mapping[str, int],
-    max_step_pct: int,
-) -> list[Action]:
+def reprice(s: Session, tracer: Tracer, t: datetime, config: PolicyConfig) -> list[Action]:
+    """Propose a band price for each SKU; policy decides, allowed ones execute now."""
+    view = DbStateView(s, t)
     with tracer.observation("routine_reprice", "agent", {"sim_time": t.isoformat()}) as root:
         actions = []
         for product in s.scalars(select(Product).order_by(Product.sku)):
@@ -95,25 +102,22 @@ def reprice(
             cheapest = cheapest_plausible(s, product.sku)
             if cheapest is None:
                 continue
-            floor = floor_price(product.cost_ex_gst_cents, product.margin_floor_pct)
             new_price = target_price(
                 product.price_inc_gst_cents,
-                start_of_day[product.sku],
+                view.start_of_day_price(product.sku),
                 cheapest,
-                floor,
-                max_step_pct,
+                floor_price(product.cost_ex_gst_cents, product.margin_floor_pct),
+                config.max_daily_step_pct,
             )
             if new_price is None:
                 continue
-            proposal = Proposal(
-                incident_id=None,
-                source="rules",
+            proposal, decision = propose(
+                s, tracer, view, IncidentContext(), config, source="rules",
                 tool="propose_price_change",
                 args={"sku": product.sku, "new_price_inc_gst_cents": new_price},
                 reason=f"cheapest plausible competitor price {cheapest}",
-            )
-            s.add(proposal)
-            s.flush()
-            actions.append(execute(s, tracer, proposal, t))
+            )  # fmt: skip
+            if decision.decision == "allowed":
+                actions.append(execute(s, tracer, proposal, t))
         root.set_output({"actions_executed": len(actions)})
     return actions

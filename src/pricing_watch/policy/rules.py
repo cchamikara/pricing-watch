@@ -143,13 +143,19 @@ def p6_daily_step(args: Args, view: StateView, _: IncidentContext, c: PolicyConf
 
 
 def markdown_cost_cents(args: Args, view: StateView) -> dict[str, int]:
-    """Category -> markdown cost (S5): ex-GST cut from the start-of-day price x forecast units."""
+    """Category -> markdown cost (S5): ex-GST cut x forecast units.
+
+    The cut is measured from the lower of the start-of-day and current price, so a SKU cut twice in
+    one day is charged once per cent. Going back up refunds nothing, and a cut after a raise is
+    charged again: it over-counts, which only errs toward refusing.
+    """
     days = 1.0
     if isinstance(args, Promotion):
         days = (args.end - args.start) / timedelta(days=1)
     costs: dict[str, int] = {}
     for sku, new in _new_prices(args, view).items():
-        cut = ex_from_inc(Cents(view.start_of_day_price(sku))) - ex_from_inc(Cents(new))
+        reference = min(view.start_of_day_price(sku), _facts(view, sku).price_inc_gst_cents)
+        cut = ex_from_inc(Cents(reference)) - ex_from_inc(Cents(new))
         category = _facts(view, sku).category
         units = view.forecast_daily(sku) * days
         costs[category] = costs.get(category, 0) + round(max(cut, 0) * units)
