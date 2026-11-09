@@ -67,6 +67,8 @@ class ClaudeProvider:
             raise ModelTimeout(f"no answer within {timeout}s") from e
         except anthropic.AnthropicError as e:
             raise ModelError(str(e)) from e
+        except TypeError as e:  # the SDK's signal that no API key or auth token was found
+            raise ModelError(f"no credentials: {e}") from e
         if response.stop_reason == "refusal":
             raise ModelError(f"refused: {response.stop_details}")
         text = "".join(b.text for b in response.content if b.type == "text")
