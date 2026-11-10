@@ -4,10 +4,13 @@ error, so the loop can fall back to the rules plan instead of crashing.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal, Protocol, TypedDict
 
 import anthropic
 from anthropic.types.beta import BetaMessageParam
+
+from pricing_watch.agent.tools import ProductRead, StockRead
 
 CLAUDE_MODEL = "claude-opus-5-5"
 MAX_TOKENS = 16000
@@ -25,6 +28,20 @@ class ModelResponse:
     model_name: str  # the model that actually answered
 
 
+@dataclass(frozen=True)
+class Brief:
+    """Server-side incident facts. Real models read the prompt; the stand-in reads this."""
+
+    kind: str
+    category: str
+    sku: str | None  # None: a category-wide incident
+    now: datetime
+    product: ProductRead | None = None
+    stock: StockRead | None = None
+    forecast_daily: float = 0.0
+    suspect: bool = False  # the incident's SKU has suspect data (P9 refuses acting on it)
+
+
 class ModelError(Exception):
     """The provider failed or declined; the caller falls back to rules."""
 
@@ -34,7 +51,9 @@ class ModelTimeout(ModelError):
 
 
 class ModelProvider(Protocol):
-    def complete(self, messages: Sequence[Message], timeout: float) -> ModelResponse: ...
+    def complete(
+        self, messages: Sequence[Message], timeout: float, brief: Brief | None = None
+    ) -> ModelResponse: ...
 
 
 class ClaudeProvider:
@@ -45,7 +64,9 @@ class ClaudeProvider:
         self._client = anthropic.Anthropic(api_key=api_key, base_url=base_url, max_retries=0)
         self._model = model
 
-    def complete(self, messages: Sequence[Message], timeout: float) -> ModelResponse:
+    def complete(
+        self, messages: Sequence[Message], timeout: float, brief: Brief | None = None
+    ) -> ModelResponse:
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
         turns: list[BetaMessageParam] = [
             {"role": "user", "content": m["content"]} if m["role"] == "user"

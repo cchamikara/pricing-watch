@@ -26,6 +26,7 @@ class ProductRead(BaseModel):
     price_inc_gst_cents: int
     margin_floor_pct: int
     floor_price_inc_gst_cents: int
+    lead_time_hours: int
     promo_lock_until: datetime | None
     supplier_description: str  # untrusted text; the prompt wraps it as data (M3.5)
 
@@ -89,7 +90,7 @@ class ReadTools:
                 sku=sku, category=p.category, cost_ex_gst_cents=p.cost_ex_gst_cents,
                 price_inc_gst_cents=p.price_inc_gst_cents, margin_floor_pct=p.margin_floor_pct,
                 floor_price_inc_gst_cents=floor_price(p.cost_ex_gst_cents, p.margin_floor_pct),
-                promo_lock_until=p.promo_lock_until,
+                lead_time_hours=p.lead_time_hours, promo_lock_until=p.promo_lock_until,
                 supplier_description=observed_description(p.supplier_description, sku,
                                                           self._faults, self._t),
             )  # fmt: skip
