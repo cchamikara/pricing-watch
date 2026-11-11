@@ -47,6 +47,8 @@ def _default(b: Brief) -> dict[str, Any]:
                 _proposal("propose_reorder", "cover the lead time", {"sku": b.sku, "qty": qty})
             )
             severity, text = "warn", f"Reordering {qty} of {b.sku} to avoid a stock-out."
+        else:  # enough on order, but it lands too late
+            severity, text = "action_needed", f"{b.sku} runs out before its order lands; expedite."
     elif b.kind == "slow_mover" and b.sku and not _locked(b):
         proposals.append(_promotion(b, 5))
         severity, text = "info", f"Running a 5% promotion on {b.sku} for two days."

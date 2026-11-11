@@ -1,7 +1,8 @@
 """Trigger detector: opens an incident for each judgment call the rules repricer can't make.
 
 Stock checks use the *observed* count (faults can make it look wrong); everything else uses the
-book. Each open incident is unique by (kind, scope), and records which SKUs looked suspect (P9).
+book. Each (kind, scope) has at most one open incident, stays quiet for COOLDOWN after one closes,
+and records which SKUs looked suspect (P9).
 """
 
 from collections.abc import Mapping
@@ -18,6 +19,7 @@ from pricing_watch.sim.repricer import BAND_PCT, latest_prices
 from pricing_watch.sim.stock import forecast_daily_demand
 
 WINDOW = timedelta(days=7)
+COOLDOWN = timedelta(days=3)  # a closed incident's (kind, scope) stays quiet this long
 # 7-day units sold / (sold + on hand), and gross margin on ex-GST revenue, per category
 SELL_THROUGH_TARGET_PCT = {"tvs": 10, "audio": 10, "accessories": 15}
 MARGIN_TARGET_PCT = {"tvs": 10, "audio": 20, "accessories": 40}
@@ -27,11 +29,9 @@ Key = tuple[str, str, str | None]  # kind, category, SKU (None: the whole catego
 
 def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Incident]:
     """Open incidents for what fires at t. observed: SKU -> stock as seen; missing = book."""
-    inbound = dict(
-        s.execute(
-            select(InboundOrder.sku, func.sum(InboundOrder.qty)).group_by(InboundOrder.sku)
-        ).all()
-    )
+    deliveries: dict[str, list[tuple[datetime, int]]] = {}
+    for order in s.scalars(select(InboundOrder).order_by(InboundOrder.eta, InboundOrder.id)):
+        deliveries.setdefault(order.sku, []).append((order.eta, order.qty))
     sales = {
         sku: (sold, revenue, cogs)
         for sku, sold, revenue, cogs in s.execute(
@@ -57,7 +57,8 @@ def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Inciden
             suspect.add(p.sku)
             fired.append(("suspect_feed", p.category, p.sku))
         forecast = forecast_daily_demand(s, p.sku, t)
-        if seen + inbound.get(p.sku, 0) < forecast * p.lead_time_hours / 24:
+        lead = timedelta(hours=p.lead_time_hours)
+        if _runs_out(seen, deliveries.get(p.sku, []), forecast / 24, t, t + lead):
             fired.append(("stockout_risk", p.category, p.sku))
         cheapest = min((r.price_inc_gst_cents for r in feed if r.plausible), default=None)
         floor = floor_price(p.cost_ex_gst_cents, p.margin_floor_pct)
@@ -69,10 +70,8 @@ def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Inciden
         if (revenue - cogs) * 100 < MARGIN_TARGET_PCT[category] * revenue:
             fired.append(("margin_erosion", category, None))
 
-    open_keys = {
-        (i.kind, i.category, i.sku)
-        for i in s.scalars(select(Incident).where(Incident.closed_at.is_(None)))
-    }
+    quiet = (Incident.closed_at.is_(None)) | (Incident.closed_at > t - COOLDOWN)
+    open_keys = {(i.kind, i.category, i.sku) for i in s.scalars(select(Incident).where(quiet))}
     category_of = dict(s.execute(select(Product.sku, Product.category)).all())
     opened = []
     for kind, category, sku in fired:
@@ -85,6 +84,27 @@ def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Inciden
     s.add_all(opened)
     s.flush()
     return opened
+
+
+def _runs_out(
+    on_hand: int,
+    deliveries: list[tuple[datetime, int]],
+    per_hour: float,
+    t: datetime,
+    horizon: datetime,
+) -> bool:
+    """Does stock run out before a delivery lands, or fall short of demand up to the horizon?
+
+    Only deliveries that land within the horizon count, each from the hour it arrives.
+    """  # fmt: skip
+    stock = float(on_hand)
+    for eta, qty in deliveries:  # sorted by arrival
+        if eta >= horizon:
+            break
+        if stock < per_hour * ((eta - t) / timedelta(hours=1)):
+            return True  # empty before this delivery arrives
+        stock += qty
+    return stock < per_hour * ((horizon - t) / timedelta(hours=1))
 
 
 def incident_context(s: Session, incident: Incident) -> IncidentContext:
