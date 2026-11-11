@@ -1,0 +1,12 @@
+# M3 exit: the provider times out, then answers with broken JSON. Every incident must still be
+# notified, answered by the rules fallback, and nothing unsafe may execute.
+id: model-outage
+seed: 1
+days: 3
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in
+model_script:
+  - behaviour: timeout
+    occurrence: 1  # each incident's first call per (kind, scope)
+  - behaviour: invalid_json  # every later call

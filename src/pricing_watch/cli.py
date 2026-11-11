@@ -1,10 +1,12 @@
 """Command line.
 
-pricing-watch sim run --scenario scenarios/smoke-7d.yaml [--seed N] [--db run.db]
+pricing-watch sim run --scenario scenarios/smoke-7d.yaml [--seed N] [--db run.db] [--model M]
 pricing-watch approvals list|approve ID|reject ID --db run.db [--note TEXT]
 """
 
 import argparse
+import logging
+import sys
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -14,7 +16,7 @@ from sqlalchemy.orm import Session
 from pricing_watch.approvals.queue import decide, pending
 from pricing_watch.models import PolicyDecision, Proposal, SalesTick, make_engine
 from pricing_watch.policy.config import load_policy
-from pricing_watch.sim.run import run_scenario
+from pricing_watch.sim.run import AGENT_HOUR, WARMUP_DAYS, run_scenario
 from pricing_watch.sim.scenario import load_scenario
 from pricing_watch.tracing import NoopTracer
 
@@ -23,10 +25,12 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="pricing-watch")
     groups = parser.add_subparsers(dest="group", required=True)
     sim = groups.add_parser("sim").add_subparsers(dest="command", required=True)
-    run = sim.add_parser("run", help="run one scenario in rules mode (agent mode arrives in M3)")
+    run = sim.add_parser("run", help="run one scenario (its mode: rules, or agent too)")
     run.add_argument("--scenario", type=Path, required=True, help="path to a scenario YAML")
     run.add_argument("--seed", type=int, help="override the scenario's seed")
     run.add_argument("--db", type=Path, help="save the run to this new SQLite file")
+    run.add_argument("--model", choices=["stand-in", "claude", "gemini"],
+                     help="override the scenario's model (agent mode only)")  # fmt: skip
     approvals = groups.add_parser("approvals").add_subparsers(dest="command", required=True)
     approvals.add_parser("list").add_argument("--db", type=Path, required=True)
     for verb in ("approve", "reject"):
@@ -50,11 +54,28 @@ def _sim_run(args: argparse.Namespace) -> None:
     config = load_scenario(args.scenario)
     if args.seed is not None:
         config = config.model_copy(update={"seed": args.seed})
+    if args.model:
+        config = config.model_copy(update={"model": args.model})
     db_url = f"sqlite:///{args.db}" if args.db else "sqlite://"
+    if config.mode == "agent":  # one line per incident as it closes, so a long run isn't silent
+        logging.basicConfig(format="%(message)s", stream=sys.stdout)  # libraries stay at WARNING
+        logging.getLogger("pricing_watch").setLevel(logging.INFO)  # only our own progress lines
+        print(
+            f"running {config.id}: {config.days} days with {config.model}, after "
+            f"{WARMUP_DAYS} warm-up days; incidents are checked daily at {AGENT_HOUR:02}:00"
+        )
+        print("sim time          kind                scope    answered by    model  severity"
+              "      actions  ✓ ran ⏸ approval ✗ refused   notice")  # fmt: skip
     summary = run_scenario(config, db_url=db_url)
-    print(f"scenario {config.id}  seed {config.seed}  {config.days} days  mode rules")
+    agent = f" ({config.model})" if config.mode == "agent" else ""
+    print(
+        f"scenario {config.id}  seed {config.seed}  {config.days} days  mode {config.mode}{agent}"
+    )
     print(f"gross margin ex GST  ${summary.gross_margin_ex_gst_cents / 100:,.2f}")
     print(f"stockout SKU-hours   {summary.stockout_sku_hours}")
+    if config.mode == "agent":
+        fallbacks = f"{summary.rules_fallbacks} by rules fallback"
+        print(f"incidents            {summary.incidents} ({fallbacks})")
     print(f"fingerprint          {summary.fingerprint[:16]}")
     print("sell-through")
     for sku, share in summary.sell_through.items():

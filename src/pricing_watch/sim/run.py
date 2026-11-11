@@ -1,4 +1,4 @@
-"""Wire the simulator together and run one scenario in rules mode."""
+"""Wire the simulator together and run one scenario, in rules mode or with the agent too."""
 
 import hashlib
 import json
@@ -9,11 +9,16 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from pricing_watch.agent.loop import handle_incident
+from pricing_watch.agent.model import ClaudeProvider, GeminiProvider, ModelProvider
+from pricing_watch.agent.standin import StandInModel
+from pricing_watch.agent.triggers import detect
 from pricing_watch.approvals.queue import scripted_review
 from pricing_watch.clock import TickClock
 from pricing_watch.models import (
     Action,
     InboundOrder,
+    Incident,
     Product,
     SalesTick,
     StockLevel,
@@ -25,7 +30,7 @@ from pricing_watch.rng import rng_for
 from pricing_watch.sim.catalogue import generate_catalogue
 from pricing_watch.sim.competitors import make_competitors, publish
 from pricing_watch.sim.demand import draw_sales, hourly_rate
-from pricing_watch.sim.faults import apply_feed_faults
+from pricing_watch.sim.faults import apply_feed_faults, observed_stock
 from pricing_watch.sim.loop import run
 from pricing_watch.sim.promotions import active_discounts
 from pricing_watch.sim.repricer import cheapest_plausible, reprice
@@ -37,12 +42,17 @@ OPENING_STOCK_DAYS = 14  # beyond the lead time, so the first reorder lands befo
 REORDER_COVER_DAYS = 14  # order this many days of forecast demand
 SAFETY_DAYS = 7  # reorder when cover falls below lead time + this
 WARMUP_DAYS = 7  # quiet rules-mode history before the start, so forecasts work from tick one
+# shortcut: the agent checks for incidents once a sim day; the loop closes each incident at once,
+# so an hourly check would reopen the same ones every hour. Add a cool-down to run it more often.
+AGENT_HOUR = 9
 
 
 @dataclass(frozen=True)
 class Summary:
     gross_margin_ex_gst_cents: int
     stockout_sku_hours: int
+    incidents: int
+    rules_fallbacks: int  # incidents the rules plan answered because the model couldn't
     sell_through: dict[str, float]  # SKU -> units sold / units available
     fingerprint: str  # hash of every sales tick and executed action, for determinism checks
 
@@ -144,6 +154,22 @@ def run_scenario(
             reprice(s, tracer, t, policy)
             scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all")
 
+    model = _model(config)
+
+    def triggers(t: datetime) -> None:
+        if config.mode == "agent" and t >= config.start and t.hour == AGENT_HOUR:
+            observed = {
+                sku: observed_stock(st.on_hand, sku, faults, t) for sku, st in stock.items()
+            }
+            detect(s, t, observed)
+
+    def incidents(t: datetime) -> None:
+        open_ = list(s.scalars(select(Incident).where(Incident.closed_at.is_(None))))
+        for incident in open_:
+            handle_incident(s, tracer, model, policy, incident, t, faults)
+        if open_:
+            scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all")
+
     run(
         TickClock(config.start - timedelta(days=WARMUP_DAYS)),
         (WARMUP_DAYS + config.days) * 24,
@@ -152,10 +178,20 @@ def run_scenario(
             "demand": demand,
             "replenishment": replenishment,
             "repricer": repricer,
+            "triggers": triggers,
+            "incidents": incidents,
         },
     )
     s.commit()
     return _summarise(s, config.start, opening, received, stockout_hours)
+
+
+def _model(config: ScenarioConfig) -> ModelProvider:
+    if config.model == "claude":
+        return ClaudeProvider()
+    if config.model == "gemini":
+        return GeminiProvider()
+    return StandInModel(config.model_script)
 
 
 def _summarise(
@@ -182,9 +218,12 @@ def _summarise(
     sold: dict[str, int] = {}
     for tick in ticks:
         sold[tick.sku] = sold.get(tick.sku, 0) + tick.units_sold
+    sources = list(s.scalars(select(Incident.answer_source)))
     return Summary(
         gross_margin_ex_gst_cents=sum(t.revenue_ex_gst_cents - t.cogs_cents for t in ticks),
         stockout_sku_hours=stockout_hours,
+        incidents=len(sources),
+        rules_fallbacks=sources.count("rules_fallback"),
         sell_through={
             # a SKU that sold out in the warm-up with nothing arriving had 0 units to sell
             sku: sold.get(sku, 0) / max(opening[sku] + received[sku], 1)

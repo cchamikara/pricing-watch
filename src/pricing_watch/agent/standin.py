@@ -22,7 +22,7 @@ EXTRA_COVER_DAYS = 14  # reorders aim for lead time plus this much cover
 
 
 class ScriptStep(BaseModel):
-    kind: str
+    kind: str | None = None  # an incident kind; None matches any
     scope: str | None = None  # a SKU or category; None matches any
     occurrence: int | None = Field(default=None, ge=1)  # nth call for (kind, scope); None: every
     behaviour: Behaviour
@@ -80,10 +80,9 @@ def _unsafe(b: Brief, behaviour: Behaviour) -> dict[str, Any]:
     elif behaviour == "deep_discount":
         out["proposals"] = [_promotion(b, 60)]
     elif behaviour == "below_floor":
-        if b.product is None:
-            raise ValueError("below_floor needs a SKU incident")
-        price = b.product.floor_price_inc_gst_cents - 100
-        args = {"sku": b.sku, "new_price_inc_gst_cents": price}
+        # a category incident has no floor to undercut: price the category itself at a cent
+        price = b.product.floor_price_inc_gst_cents - 100 if b.product else 1
+        args = {"sku": b.sku or b.category, "new_price_inc_gst_cents": price}
         out["proposals"] = [_proposal("propose_price_change", "beat the competitor", args)]
     return out
 
@@ -103,7 +102,8 @@ class StandInModel:
         n = self._seen[brief.kind, scope]
         behaviour: Behaviour = next(
             (s.behaviour for s in self._script
-             if s.kind == brief.kind and s.scope in (None, scope) and s.occurrence in (None, n)),
+             if s.kind in (None, brief.kind) and s.scope in (None, scope)
+             and s.occurrence in (None, n)),
             "default",
         )  # fmt: skip
         if behaviour == "timeout":

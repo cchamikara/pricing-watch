@@ -5,6 +5,8 @@ raises. A model failure (timeout, error, unparsable output) falls back to the ru
 (`agent/fallback.py`), which goes through policy the same way.
 """
 
+import logging
+import time
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -29,6 +31,7 @@ from pricing_watch.sim.repricer import execute
 from pricing_watch.tracing import Tracer
 
 MODEL_TIMEOUT_S = 60.0
+log = logging.getLogger("pricing_watch")
 
 
 @dataclass
@@ -38,7 +41,9 @@ class _Outcome:
     answer_source: str = "model"
     model_reachable: bool = False
     decisions: Counter[str] = field(default_factory=Counter)
+    marks: list[str] = field(default_factory=list)  # "tool ✓|⏸|✗ rule" per proposal, for the log
     executed: int = 0
+    model_seconds: float = 0.0
 
 
 def handle_incident(
@@ -82,6 +87,10 @@ def handle_incident(
                 actions_executed=out.executed,
             )  # fmt: skip
             root.set_output({"severity": out.severity, "message": out.text})
+            first_line = out.text.splitlines()[0][:80] if out.text else ""
+            log.info("%s  %-19s %-8s %-14s %5.1fs  %-13s %-36s %s", t.strftime("%Y-%m-%d %H:%M"),
+                     incident.kind, scope, out.answer_source, out.model_seconds, out.severity,
+                     ", ".join(out.marks) or "-", first_line)  # fmt: skip
     return note
 
 
@@ -127,6 +136,10 @@ def _work(
             reason=p.reason, incident_id=incident.id,
         )  # fmt: skip
         out.decisions[decision.decision] += 1
+        mark = {"allowed": "✓", "needs_approval": "⏸"}.get(decision.decision, "✗")
+        rule = f" {decision.rule_ids[0].split('-')[0]}" if decision.decision == "refused" else ""
+        shown = " ".join(p.tool.split())[:40]  # model text: no newlines, so it can't forge a line
+        out.marks.append(f"{shown} {mark}{rule}")
         if decision.decision == "allowed":
             execute(s, tracer, proposal, t)
             out.executed += 1
@@ -156,6 +169,7 @@ def _diagnose(
          "content": incident_prompt(incident.kind, scope, t, incident.suspect_skus, found)},
     ]  # fmt: skip
     with tracer.observation("diagnose", "generation", messages) as gen:
+        started = time.perf_counter()  # wall time for display only; the simulation never reads it
         try:
             response = model.complete(messages, MODEL_TIMEOUT_S, brief)
             out.model_reachable = True
@@ -165,3 +179,6 @@ def _diagnose(
         except ModelError as e:
             gen.set_output({"error": f"{type(e).__name__}: {e}"})
             return None
+        finally:
+            out.model_seconds = round(time.perf_counter() - started, 1)
+            gen.set_attributes(latency_s=out.model_seconds)

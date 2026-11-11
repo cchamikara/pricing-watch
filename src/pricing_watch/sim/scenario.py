@@ -7,6 +7,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field
 
+from pricing_watch.agent.standin import ScriptStep
 from pricing_watch.sim.faults import Fault, FaultKind
 
 
@@ -24,6 +25,9 @@ class ScenarioConfig(BaseModel):
     start: datetime
     faults: list[FaultConfig] = []
     reviewer: Literal["approve_all", "reject_all"] = "approve_all"  # scripted, same tick
+    mode: Literal["rules", "agent"] = "rules"  # agent: the incident loop runs alongside the rules
+    model: Literal["stand-in", "claude", "gemini"] = "stand-in"
+    model_script: list[ScriptStep] = []  # the stand-in's script; real models ignore it
 
     def fault_schedule(self) -> list[Fault]:
         return [

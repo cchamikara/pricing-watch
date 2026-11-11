@@ -16,7 +16,7 @@ from google.genai import errors, types
 from pricing_watch.agent.tools import ProductRead, StockRead
 
 CLAUDE_MODEL = "claude-opus-5-5"
-GEMINI_MODEL = "gemini-3.8-flash"  # optional provider; Claude stays the default
+GEMINI_MODEL = "gemini-3.5-flash"  # optional provider; 3.8-flash was overloaded on the free tier
 MAX_TOKENS = 16000
 
 
