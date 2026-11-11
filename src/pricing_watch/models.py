@@ -48,6 +48,7 @@ class CompetitorPrice(Base):
     price_inc_gst_cents: Mapped[int]
     published_at: Mapped[datetime]
     plausible: Mapped[bool]
+    note: Mapped[str] = mapped_column(default="")  # the listing's free text; untrusted
 
 
 class Incident(Base):
