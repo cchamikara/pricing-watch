@@ -8,11 +8,15 @@ from datetime import datetime
 from typing import Literal, Protocol, TypedDict
 
 import anthropic
+import httpx2  # google-genai's HTTP client; its errors are the transport failures
 from anthropic.types.beta import BetaMessageParam
+from google import genai
+from google.genai import errors, types
 
 from pricing_watch.agent.tools import ProductRead, StockRead
 
 CLAUDE_MODEL = "claude-opus-5-5"
+GEMINI_MODEL = "gemini-3.8-flash"  # optional provider; Claude stays the default
 MAX_TOKENS = 16000
 
 
@@ -96,3 +100,56 @@ class ClaudeProvider:
         usage = {"input_tokens": response.usage.input_tokens,
                  "output_tokens": response.usage.output_tokens}  # fmt: skip
         return ModelResponse(raw_text=text, usage=usage, model_name=response.model)
+
+
+class GeminiProvider:
+    def __init__(
+        self, model: str = GEMINI_MODEL, api_key: str | None = None, base_url: str | None = None
+    ) -> None:
+        self._model = model
+        # attempts=1: no SDK retries, so `timeout` bounds the whole call (as for Claude)
+        self._options = types.HttpOptions(
+            base_url=base_url, retry_options=types.HttpRetryOptions(attempts=1)
+        )
+        try:  # reads GEMINI_API_KEY or GOOGLE_API_KEY when api_key is None
+            self._client: genai.Client | None = genai.Client(
+                api_key=api_key, http_options=self._options
+            )
+            self._no_client = ""
+        except ValueError as e:  # no key: fail on the call, so the loop falls back to rules
+            self._client, self._no_client = None, str(e)
+
+    def complete(
+        self, messages: Sequence[Message], timeout: float, brief: Brief | None = None
+    ) -> ModelResponse:
+        if self._client is None:
+            raise ModelError(f"no credentials: {self._no_client}")
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        contents = [
+            types.Content(role="model" if m["role"] == "assistant" else "user",
+                          parts=[types.Part(text=m["content"])])
+            for m in messages if m["role"] != "system"
+        ]  # fmt: skip
+        config = types.GenerateContentConfig(
+            system_instruction=system or None,
+            max_output_tokens=MAX_TOKENS,
+            http_options=self._options.model_copy(update={"timeout": int(timeout * 1000)}),  # ms
+        )
+        try:
+            response = self._client.models.generate_content(
+                model=self._model, contents=contents, config=config
+            )
+        except httpx2.TimeoutException as e:
+            raise ModelTimeout(f"no answer within {timeout}s") from e
+        except (errors.APIError, httpx2.HTTPError) as e:
+            raise ModelError(str(e)) from e
+        if not response.text:  # blocked by safety settings, or no text part
+            reason = response.candidates[0].finish_reason if response.candidates else None
+            raise ModelError(f"no text in the reply (finish reason {reason})")
+        usage = response.usage_metadata
+        return ModelResponse(
+            raw_text=response.text,
+            usage={"input_tokens": (usage and usage.prompt_token_count) or 0,
+                   "output_tokens": (usage and usage.candidates_token_count) or 0},
+            model_name=response.model_version or self._model,
+        )  # fmt: skip
