@@ -43,3 +43,8 @@ def floor_price(cost_ex_gst_cents: int, margin_floor_pct: int) -> int:
     """
     min_ex = ceil_div(cost_ex_gst_cents * (100 + margin_floor_pct), 100)
     return ceil_div(22 * min_ex - 11, 20)
+
+
+def discounted(price_inc_gst_cents: int, discount_pct: int) -> int:
+    """Promotion price: the discount rounds in our favour (down to the cent)."""
+    return price_inc_gst_cents * (100 - discount_pct) // 100

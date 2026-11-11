@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pricing_watch.models import Action, InboundOrder, MarkdownLedger, Product, StockLevel
-from pricing_watch.money import Cents, ex_from_inc, floor_price
+from pricing_watch.money import Cents, discounted, ex_from_inc, floor_price
 from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.schemas import (
     ACTION_SCHEMAS,
@@ -24,6 +24,7 @@ from pricing_watch.policy.schemas import (
     RequestReview,
     parse_action,
 )
+from pricing_watch.sim.promotions import active_discounts
 from pricing_watch.sim.stock import forecast_daily_demand
 
 DecisionKind = Literal["allowed", "needs_approval", "refused"]
@@ -47,6 +48,7 @@ class StateView(Protocol):
     def markdown_spent_cents(self, category: str) -> int: ...
     def forecast_daily(self, sku: str) -> float: ...
     def stock(self, sku: str) -> tuple[int, int]: ...  # (on hand, inbound)
+    def discount_pct(self, sku: str) -> int: ...  # promotion in force now, 0 if none
 
 
 @dataclass(frozen=True)
@@ -89,7 +91,7 @@ def _new_prices(args: Args, view: StateView) -> dict[str, int]:
         return {args.sku: args.new_price_inc_gst_cents}
     if isinstance(args, Promotion):
         return {
-            sku: _facts(view, sku).price_inc_gst_cents * (100 - args.discount_pct) // 100
+            sku: discounted(_facts(view, sku).price_inc_gst_cents, args.discount_pct)
             for sku in args.skus
         }
     return {}
@@ -115,6 +117,8 @@ def p4_margin_floor(
 ) -> RuleResult:
     checked = {}
     for sku, new in _new_prices(args, view).items():
+        if isinstance(args, PriceChange):  # a running promotion applies on top of the new price
+            new = discounted(new, view.discount_pct(sku))
         f = _facts(view, sku)
         floor = floor_price(f.cost_ex_gst_cents, f.margin_floor_pct)
         checked[f"floor:{sku}"] = floor
@@ -288,6 +292,9 @@ class DbStateView:
 
     def forecast_daily(self, sku: str) -> float:
         return forecast_daily_demand(self._s, sku, self._t)
+
+    def discount_pct(self, sku: str) -> int:
+        return active_discounts(self._s, self._t).get(sku, 0)
 
     def stock(self, sku: str) -> tuple[int, int]:
         level = self._s.get(StockLevel, sku)

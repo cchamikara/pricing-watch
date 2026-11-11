@@ -6,16 +6,33 @@ Call it after a competitor publish; the executor writes the authoritative snapsh
 """
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from pricing_watch.models import Action, CompetitorPrice, MarkdownLedger, Product, Proposal
-from pricing_watch.money import ceil_div, floor_price
+from pricing_watch.models import (
+    Action,
+    CompetitorPrice,
+    MarkdownLedger,
+    Notification,
+    Product,
+    Proposal,
+    ScheduledDiscount,
+)
+from pricing_watch.money import ceil_div, discounted, floor_price
 from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.decide import propose
 from pricing_watch.policy.rules import DbStateView, IncidentContext, markdown_cost_cents
-from pricing_watch.policy.schemas import parse_action
+from pricing_watch.policy.schemas import (
+    NotifyMerchandiser,
+    PriceChange,
+    Promotion,
+    Reorder,
+    RequestReview,
+    parse_action,
+)
+from pricing_watch.sim.stock import reorder
 from pricing_watch.tracing import Tracer
 
 BAND_PCT = (98, 102)  # target range as % of the cheapest plausible competitor price
@@ -63,40 +80,86 @@ def cheapest_plausible(s: Session, sku: str) -> int | None:
 
 
 def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Action:
-    """Apply an allowed proposal, charge its markdown, and record what the store looked like."""
+    """Apply a proposal policy allowed, and record what the store looked like (S3).
+
+    A proposed `notify_merchandiser` is sent here; each incident's closing notice is sent by the
+    incident loop instead, so it can never be refused.
+    """
     with tracer.observation(f"execute:{proposal.tool}", "tool", proposal.args) as obs:
-        if proposal.tool != "propose_price_change":
-            raise ValueError(f"executor cannot run {proposal.tool!r} yet")
-        # before the price changes: the cost is measured from the current price
-        parsed = parse_action(proposal.tool, proposal.args)
-        for category, cost in markdown_cost_cents(parsed, DbStateView(s, t)).items():
-            row = s.get(MarkdownLedger, (category, t.date()))
-            if row is None:
-                row = MarkdownLedger(category=category, sim_day=t.date(), spent_cents=0)
-                s.add(row)
-            row.spent_cents += cost
-        product = s.get_one(Product, proposal.args["sku"])
-        new_price = int(proposal.args["new_price_inc_gst_cents"])
-        snapshot = {
-            "cost_ex_gst_cents": product.cost_ex_gst_cents,
-            "floor_price_inc_gst_cents": floor_price(
-                product.cost_ex_gst_cents, product.margin_floor_pct
-            ),
-            "old_price_inc_gst_cents": product.price_inc_gst_cents,
-            "new_price_inc_gst_cents": new_price,
-        }
-        product.price_inc_gst_cents = new_price
-        action = Action(
-            proposal_id=proposal.id,
-            tool=proposal.tool,
-            args=proposal.args,
-            result=snapshot,
-            executed_at=t,
-        )
+        args = parse_action(proposal.tool, proposal.args)
+        view = DbStateView(s, t)
+        result: dict[str, Any]
+        if isinstance(args, PriceChange | Promotion):
+            spent = _charge_markdown(s, args, view, t)  # first: cost is measured from the old price
+            if isinstance(args, PriceChange):
+                product = s.get_one(Product, args.sku)
+                result = _price_facts(product) | {
+                    "old_price_inc_gst_cents": product.price_inc_gst_cents,
+                    "new_price_inc_gst_cents": args.new_price_inc_gst_cents,
+                }
+                product.price_inc_gst_cents = args.new_price_inc_gst_cents
+            else:
+                result = {"skus": {}}
+                for sku in args.skus:
+                    product = s.get_one(Product, sku)
+                    result["skus"][sku] = _price_facts(product) | {
+                        "price_inc_gst_cents": product.price_inc_gst_cents,
+                        "promo_price_inc_gst_cents": discounted(
+                            product.price_inc_gst_cents, args.discount_pct
+                        ),
+                    }
+                    s.add(ScheduledDiscount(proposal_id=proposal.id, sku=sku,
+                                            discount_pct=args.discount_pct,
+                                            start=args.start, end=args.end))  # fmt: skip
+            result["markdown_spent_cents"] = spent
+        elif isinstance(args, Reorder):
+            on_hand, inbound = view.stock(args.sku)
+            order = reorder(s, args.sku, args.qty, t)
+            result = {"on_hand": on_hand, "inbound_before": inbound, "qty": args.qty,
+                      "eta": order.eta.isoformat(),
+                      "forecast_daily": view.forecast_daily(args.sku)}  # fmt: skip
+        elif isinstance(args, RequestReview):  # the Action row is the review request
+            result = {"price_inc_gst_cents": s.get_one(Product, args.sku).price_inc_gst_cents,
+                      "on_hand": view.stock(args.sku)[0]}  # fmt: skip
+        else:
+            assert isinstance(args, NotifyMerchandiser)
+            if proposal.incident_id is None:
+                raise ValueError("a notification needs an incident")
+            note = Notification(incident_id=proposal.incident_id, severity=args.severity,
+                                message=args.message, sent_at=t)  # fmt: skip
+            s.add(note)
+            s.flush()
+            result = {"notification_id": note.id}
+        action = Action(proposal_id=proposal.id, tool=proposal.tool, args=proposal.args,
+                        result=result, executed_at=t)  # fmt: skip
         s.add(action)
         s.flush()
-        obs.set_output(snapshot)
+        obs.set_output(result)
     return action
+
+
+def _price_facts(product: Product) -> dict[str, Any]:
+    return {
+        "cost_ex_gst_cents": product.cost_ex_gst_cents,
+        "floor_price_inc_gst_cents": floor_price(
+            product.cost_ex_gst_cents, product.margin_floor_pct
+        ),
+    }
+
+
+def _charge_markdown(
+    s: Session, args: PriceChange | Promotion, view: DbStateView, t: datetime
+) -> dict[str, dict[str, int]]:
+    """Add the markdown cost to today's ledger; returns spend before and after, per category."""
+    spent = {}
+    for category, cost in markdown_cost_cents(args, view).items():
+        row = s.get(MarkdownLedger, (category, t.date()))
+        if row is None:
+            row = MarkdownLedger(category=category, sim_day=t.date(), spent_cents=0)
+            s.add(row)
+        spent[category] = {"before": row.spent_cents, "after": row.spent_cents + cost}
+        row.spent_cents += cost
+    return spent
 
 
 def reprice(s: Session, tracer: Tracer, t: datetime, config: PolicyConfig) -> list[Action]:

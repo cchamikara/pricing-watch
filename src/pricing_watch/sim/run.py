@@ -1,6 +1,7 @@
 """Wire the simulator together and run one scenario in rules mode."""
 
 import hashlib
+import json
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -18,7 +19,7 @@ from pricing_watch.models import (
     StockLevel,
     make_engine,
 )
-from pricing_watch.money import Cents, ex_from_inc
+from pricing_watch.money import Cents, discounted, ex_from_inc
 from pricing_watch.policy.config import load_policy
 from pricing_watch.rng import rng_for
 from pricing_watch.sim.catalogue import generate_catalogue
@@ -26,6 +27,7 @@ from pricing_watch.sim.competitors import make_competitors, publish
 from pricing_watch.sim.demand import draw_sales, hourly_rate
 from pricing_watch.sim.faults import apply_feed_faults
 from pricing_watch.sim.loop import run
+from pricing_watch.sim.promotions import active_discounts
 from pricing_watch.sim.repricer import cheapest_plausible, reprice
 from pricing_watch.sim.scenario import ScenarioConfig
 from pricing_watch.sim.stock import days_of_cover, forecast_daily_demand, receive_arrivals, reorder
@@ -42,7 +44,7 @@ class Summary:
     gross_margin_ex_gst_cents: int
     stockout_sku_hours: int
     sell_through: dict[str, float]  # SKU -> units sold / units available
-    fingerprint: str  # hash of every sales tick and price change, for determinism checks
+    fingerprint: str  # hash of every sales tick and executed action, for determinism checks
 
 
 def run_scenario(
@@ -101,8 +103,9 @@ def run_scenario(
         nonlocal stockout_hours
         if t == config.start:
             opening.update({sku: st.on_hand for sku, st in stock.items()})
+        discounts = active_discounts(s, t)
         for i in items:
-            price = products[i.sku].price_inc_gst_cents
+            price = discounted(products[i.sku].price_inc_gst_cents, discounts.get(i.sku, 0))
             rate = hourly_rate(i, price, t, cheapest[i.sku])
             sold, lost = draw_sales(demand_rng, rate, stock[i.sku].on_hand)
             stock[i.sku].on_hand -= sold
@@ -175,7 +178,7 @@ def _summarise(
     for tick in ticks:
         h.update(f"{tick.sku}|{tick.sim_time}|{tick.units_sold}|{tick.lost_units}\n".encode())
     for a in actions:
-        h.update(f"{a.executed_at}|{a.args['sku']}|{a.args['new_price_inc_gst_cents']}\n".encode())
+        h.update(f"{a.executed_at}|{a.tool}|{json.dumps(a.args, sort_keys=True)}\n".encode())
     sold: dict[str, int] = {}
     for tick in ticks:
         sold[tick.sku] = sold.get(tick.sku, 0) + tick.units_sold

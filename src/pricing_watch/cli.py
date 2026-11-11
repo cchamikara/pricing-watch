@@ -89,7 +89,7 @@ def _approvals_decide(db: Path, proposal_id: int, approve: bool, note: str) -> N
                         approve=approve, reviewer="cli", note=note, t=t)  # fmt: skip
     except NoResultFound as e:
         raise SystemExit(f"no approval for proposal {proposal_id}") from e
-    except ValueError as e:  # already decided, or a tool the executor can't run yet
+    except ValueError as e:  # already decided
         raise SystemExit(str(e)) from e
     s.commit()
     if not approve:

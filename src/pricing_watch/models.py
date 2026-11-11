@@ -93,6 +93,18 @@ class Action(Base):
     executed_at: Mapped[datetime]
 
 
+class ScheduledDiscount(Base):
+    """An executed promotion: customers pay the discounted price from start until end."""
+
+    __tablename__ = "scheduled_discount"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    proposal_id: Mapped[int] = mapped_column(ForeignKey("proposal.id"))
+    sku: Mapped[str] = mapped_column(ForeignKey("product.sku"), index=True)
+    discount_pct: Mapped[int]
+    start: Mapped[datetime]
+    end: Mapped[datetime]  # exclusive
+
+
 class Approval(Base):
     __tablename__ = "approval"
     proposal_id: Mapped[int] = mapped_column(ForeignKey("proposal.id"), primary_key=True)
