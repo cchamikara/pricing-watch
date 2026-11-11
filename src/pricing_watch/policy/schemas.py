@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, NaiveDatetime, StrictInt, mod
 
 Sku = Annotated[str, Field(min_length=1, max_length=32)]
 Cents = Annotated[StrictInt, Field(gt=0)]
+Severity = Literal["info", "warn", "action_needed"]  # the spec's model output values
 
 
 class _Args(BaseModel):
@@ -41,7 +42,7 @@ class RequestReview(_Args):
 
 
 class NotifyMerchandiser(_Args):
-    severity: Literal["info", "warning", "critical"]
+    severity: Severity
     message: str = Field(min_length=1, max_length=2000)
 
 
