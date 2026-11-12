@@ -11,7 +11,14 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from pricing_watch.models import InboundOrder, Incident, Product, SalesTick, StockLevel
+from pricing_watch.models import (
+    InboundOrder,
+    Incident,
+    Product,
+    SalesTick,
+    StockLevel,
+    SupplierNotice,
+)
 from pricing_watch.money import floor_price
 from pricing_watch.policy.rules import IncidentContext
 from pricing_watch.sim.catalogue import PLAUSIBLE_BAND
@@ -70,7 +77,10 @@ def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Inciden
         if (revenue - cogs) * 100 < MARGIN_TARGET_PCT[category] * revenue:
             fired.append(("margin_erosion", category, None))
 
-    quiet = (Incident.closed_at.is_(None)) | (Incident.closed_at > t - COOLDOWN)
+    fired += _notice_keys(s, t)
+    quiet = (Incident.kind != "supplier_notice") & (
+        Incident.closed_at.is_(None) | (Incident.closed_at > t - COOLDOWN)
+    )  # each notice is its own event: _notice_keys dedupes those
     open_keys = {(i.kind, i.category, i.sku) for i in s.scalars(select(Incident).where(quiet))}
     category_of = dict(s.execute(select(Product.sku, Product.category)).all())
     opened = []
@@ -84,6 +94,26 @@ def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Inciden
     s.add_all(opened)
     s.flush()
     return opened
+
+
+def _notice_keys(s: Session, t: datetime) -> list[Key]:
+    """One supplier_notice incident per SKU a notice covers, for each notice that arrived after
+    that SKU's last one, so every notice is handled once whatever the cool-down."""
+    last = dict(
+        s.execute(
+            select(Incident.sku, func.max(Incident.opened_at))
+            .where(Incident.kind == "supplier_notice")
+            .group_by(Incident.sku)
+        ).all()
+    )
+    category_of = dict(s.execute(select(Product.sku, Product.category)).all())
+    keys: set[Key] = set()
+    for n in s.scalars(select(SupplierNotice).where(SupplierNotice.sent_at <= t)):
+        covered = [n.sku] if n.sku else [k for k, c in category_of.items() if c == n.category]
+        for sku in covered:
+            if sku in category_of and (sku not in last or n.sent_at > last[sku]):
+                keys.add(("supplier_notice", category_of[sku], sku))
+    return sorted(keys, key=lambda k: k[2] or "")
 
 
 def _runs_out(

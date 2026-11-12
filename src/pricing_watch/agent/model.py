@@ -44,6 +44,8 @@ class Brief:
     stock: StockRead | None = None
     forecast_daily: float = 0.0
     suspect: bool = False  # the incident's SKU has suspect data (P9 refuses acting on it)
+    notes: tuple[str, ...] = ()  # competitor listing notes, as text
+    notices: tuple[str, ...] = ()  # supplier notices, as text
 
 
 class ModelError(Exception):

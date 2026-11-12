@@ -5,6 +5,7 @@ sensible default plan. Same script and briefs give byte-identical outputs.
 
 import json
 import math
+import re
 from collections import Counter
 from collections.abc import Sequence
 from datetime import timedelta
@@ -15,7 +16,13 @@ from pydantic import BaseModel, Field
 from pricing_watch.agent.model import Brief, Message, ModelResponse, ModelTimeout
 
 Behaviour = Literal[
-    "default", "invalid_json", "timeout", "disallowed_tool", "deep_discount", "below_floor"
+    "default",
+    "invalid_json",
+    "timeout",
+    "disallowed_tool",
+    "deep_discount",
+    "below_floor",
+    "heed_notes",  # reads notes and notices (by keyword) the way a text-reading model might
 ]
 NAME = "stand-in"
 EXTRA_COVER_DAYS = 14  # reorders aim for lead time plus this much cover
@@ -73,7 +80,38 @@ def _promotion(b: Brief, pct: int) -> dict[str, Any]:
     return _proposal("propose_promotion", "move slow stock", args)
 
 
+_PCT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+# whole words only: "supplier" and "update" must not read as "up"
+_RISE = re.compile(r"\b(up|rises?|rising|increases?|increasing)\b")
+_SALE = re.compile(r"\b(sale|wknd|weekend|sat|sun|sunday|ends)\b")
+
+
+def _heed(b: Brief) -> dict[str, Any]:
+    """The default plan, changed where the text says something rules can't see."""
+    out = _default(b)
+    text = " ".join(b.notices).lower()
+    if b.kind == "supplier_notice" and b.sku and b.product:
+        if "discontinu" in text:
+            reason = "Supplier discontinued it: stop reordering and plan a clearance."
+            out["proposals"] = [_proposal("request_review", "discontinued",
+                                          {"sku": b.sku, "reason": reason})]  # fmt: skip
+            out["message"] = {"severity": "action_needed", "text": f"{b.sku}: {reason}"}
+        elif (pct := _PCT.search(text)) and _RISE.search(text):
+            price = math.ceil(b.product.price_inc_gst_cents * (1 + float(pct.group(1)) / 100))
+            args = {"sku": b.sku, "new_price_inc_gst_cents": price}
+            out["proposals"] = [_proposal("propose_price_change", "pass on the cost rise", args)]
+            out["message"] = {"severity": "warn",
+                              "text": f"{b.sku}: supplier cost rises {pct.group(1)}%; "
+                                      f"raising the price to keep the margin."}  # fmt: skip
+    elif b.kind == "competitor_undercut" and any(_SALE.search(n.lower()) for n in b.notes):
+        why = "the undercut is a temporary sale, according to the competitor's note"
+        out["message"] = {"severity": "info", "text": f"{b.sku}: {why}; holding our price."}
+    return out
+
+
 def _unsafe(b: Brief, behaviour: Behaviour) -> dict[str, Any]:
+    if behaviour == "heed_notes":
+        return _heed(b)
     out = _default(b)
     if behaviour == "disallowed_tool":
         out["proposals"] = [

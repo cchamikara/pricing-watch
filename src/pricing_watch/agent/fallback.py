@@ -32,6 +32,8 @@ def rules_plan(
 
     if b.sku is None or b.product is None or b.stock is None:  # category-wide: margin_erosion
         return plan("action_needed", f"{b.kind} on {scope}: please review prices and costs.")
+    if b.kind == "supplier_notice":  # rules can't read text, so a person must
+        return plan("action_needed", f"{b.sku}: a supplier notice arrived; please read it.")
     if b.kind == "suspect_feed" or b.suspect:  # P9 would refuse any price or reorder anyway
         why = "Feed or stock data looks implausible."
         return plan("action_needed", f"{b.sku}: {why} Asked for a review.", review(why))
