@@ -1,7 +1,7 @@
 """Sim-side faults, applied to what the agent and repricer observe, never to the true state.
 
 A stock glitch makes stock *look* wrong for a tick while customers still buy real stock, so
-every fault is a filter over observations. Model outage and unsafe model live agent-side (M3.4).
+every fault is a filter over observations. Model outage and unsafe model live agent-side .
 """
 
 from collections.abc import Sequence

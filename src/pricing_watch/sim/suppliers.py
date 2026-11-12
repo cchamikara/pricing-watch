@@ -1,4 +1,4 @@
-"""Supplier notices (M3T.3): the text the agent can read, and the change the simulator applies.
+"""Supplier notices: the text the agent can read, and the change the simulator applies.
 
 A scenario schedules each notice. At `sent_hour` the text arrives as a SupplierNotice; at
 `effective_hour` the world changes: the cost moves, or the SKU stops taking orders. The date and
@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pricing_watch.models import Product, SupplierNotice
+from pricing_watch.models import Product, StockLevel, SupplierNotice
 from pricing_watch.sim.catalogue import PROFILES
 
 
@@ -51,6 +51,9 @@ def supplier_events(
             scope = Product.sku == n.sku if n.sku else Product.category == n.category
             for product in s.scalars(select(Product).where(scope)):
                 if n.cost_change_pct is not None:
+                    stock = s.get(StockLevel, product.sku)
+                    if stock and stock.avg_cost_ex_gst_cents is None:  # bought at the old cost
+                        stock.avg_cost_ex_gst_cents = product.cost_ex_gst_cents
                     product.cost_ex_gst_cents = (
                         product.cost_ex_gst_cents * (100 + n.cost_change_pct) // 100
                     )

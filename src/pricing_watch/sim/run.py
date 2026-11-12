@@ -22,18 +22,22 @@ from pricing_watch.models import (
     Product,
     SalesTick,
     StockLevel,
+    SupplierNotice,
     make_engine,
 )
 from pricing_watch.money import Cents, discounted, ex_from_inc
-from pricing_watch.policy.config import load_policy
+from pricing_watch.policy.config import PolicyConfig, load_policy
+from pricing_watch.policy.decide import propose
+from pricing_watch.policy.rules import DbStateView, IncidentContext
 from pricing_watch.rng import rng_for
 from pricing_watch.sim.catalogue import generate_catalogue
 from pricing_watch.sim.competitors import make_competitors, publish
 from pricing_watch.sim.demand import draw_sales, hourly_rate
 from pricing_watch.sim.faults import apply_feed_faults, observed_stock
+from pricing_watch.sim.keywords import cost_rise_pct, discontinued_skus, stock_up_qty
 from pricing_watch.sim.loop import run
 from pricing_watch.sim.promotions import active_discounts
-from pricing_watch.sim.repricer import cheapest_plausible, reprice
+from pricing_watch.sim.repricer import cheapest_plausible, execute, reprice
 from pricing_watch.sim.scenario import ScenarioConfig
 from pricing_watch.sim.stock import days_of_cover, forecast_daily_demand, receive_arrivals, reorder
 from pricing_watch.sim.suppliers import supplier_events
@@ -128,13 +132,19 @@ def run_scenario(
                     units_sold=sold,
                     lost_units=lost,
                     revenue_ex_gst_cents=ex_from_inc(Cents(price)) * sold,
-                    cogs_cents=products[i.sku].cost_ex_gst_cents * sold,  # after any cost rise
+                    cogs_cents=(
+                        stock[i.sku].avg_cost_ex_gst_cents  # what it cost to buy
+                        or products[i.sku].cost_ex_gst_cents
+                    )
+                    * sold,
                 )
             )
         s.flush()
 
     def replenishment(t: datetime) -> None:
         supplier_events(s, config.supplier_notices, config.start, t)
+        if config.text_rules:
+            _stock_up_before_cost_rises(s, tracer, policy, t)
         for order in receive_arrivals(s, t):
             if t >= config.start:
                 received[order.sku] += order.qty
@@ -145,7 +155,10 @@ def run_scenario(
                 select(InboundOrder.sku, func.sum(InboundOrder.qty)).group_by(InboundOrder.sku)
             ).all()
         )
+        gone = discontinued_skus(s, t) if config.text_rules else set()
         for sku, p in products.items():
+            if sku in gone:
+                continue
             forecast = forecast_daily_demand(s, sku, t)
             cover = days_of_cover(stock[sku].on_hand + inbound.get(sku, 0), forecast)
             if cover < p.lead_time_hours / 24 + SAFETY_DAYS:
@@ -153,7 +166,7 @@ def run_scenario(
 
     def repricer(t: datetime) -> None:
         if published:
-            reprice(s, tracer, t, policy)
+            reprice(s, tracer, t, policy, text_rules=config.text_rules)
             scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all")
 
     model = _model(config)
@@ -186,6 +199,32 @@ def run_scenario(
     )
     s.commit()
     return _summarise(s, config.start, opening, received, stockout_hours)
+
+
+def _stock_up_before_cost_rises(
+    s: Session, tracer: Tracer, policy: PolicyConfig, t: datetime
+) -> None:
+    """Keyword rules: on a notice saying "cost up N%", order up to STOCK_UP_DAYS of cover at
+    today's cost, through policy like any rules change. Keywords can't read the date, so it
+    orders as soon as the notice arrives."""
+    for notice in s.scalars(select(SupplierNotice).where(SupplierNotice.sent_at == t)):
+        pct = cost_rise_pct(notice.text)
+        if pct is None:
+            continue
+        scope = Product.sku == notice.sku if notice.sku else Product.category == notice.category
+        view = DbStateView(s, t)
+        for sku in s.scalars(select(Product.sku).where(scope).order_by(Product.sku)):
+            on_hand, inbound = view.stock(sku)
+            qty = stock_up_qty(view.forecast_daily(sku), on_hand, inbound)
+            if qty <= 0:
+                continue
+            proposal, decision = propose(
+                s, tracer, view, IncidentContext(), policy, source="rules",
+                tool="propose_reorder", args={"sku": sku, "qty": qty},
+                reason=f"supplier notice: stock up before cost up {pct}%",
+            )  # fmt: skip
+            if decision.decision == "allowed":
+                execute(s, tracer, proposal, t)
 
 
 def _model(config: ScenarioConfig) -> ModelProvider:

@@ -1,4 +1,4 @@
-# M3 exit: the provider times out, then answers with broken JSON. Every incident must still be
+# The provider times out, then answers with broken JSON. Every incident must still be
 # notified, answered by the rules fallback, and nothing unsafe may execute.
 id: model-outage
 seed: 1

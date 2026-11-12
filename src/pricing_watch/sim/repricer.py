@@ -32,6 +32,7 @@ from pricing_watch.policy.schemas import (
     RequestReview,
     parse_action,
 )
+from pricing_watch.sim.keywords import looks_temporary
 from pricing_watch.sim.stock import reorder
 from pricing_watch.tracing import Tracer
 
@@ -74,9 +75,14 @@ def latest_prices(s: Session, sku: str) -> list[CompetitorPrice]:
     )
 
 
-def cheapest_plausible(s: Session, sku: str) -> int | None:
-    """Lowest of each competitor's latest price for the SKU, skipping implausible ones."""
-    return min((r.price_inc_gst_cents for r in latest_prices(s, sku) if r.plausible), default=None)
+def cheapest_plausible(s: Session, sku: str, skip_temporary: bool = False) -> int | None:
+    """Lowest of each competitor's latest price for the SKU, skipping implausible ones, and with
+    skip_temporary, those whose note looks like a short sale."""
+    return min(
+        (r.price_inc_gst_cents for r in latest_prices(s, sku)
+         if r.plausible and not (skip_temporary and looks_temporary(r.note))),
+        default=None,
+    )  # fmt: skip
 
 
 def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Action:
@@ -162,15 +168,18 @@ def _charge_markdown(
     return spent
 
 
-def reprice(s: Session, tracer: Tracer, t: datetime, config: PolicyConfig) -> list[Action]:
-    """Propose a band price for each SKU; policy decides, allowed ones execute now."""
+def reprice(
+    s: Session, tracer: Tracer, t: datetime, config: PolicyConfig, *, text_rules: bool = False
+) -> list[Action]:
+    """Propose a band price for each SKU; policy decides, allowed ones execute now. With
+    text_rules, competitor prices whose note looks temporary are not followed."""
     view = DbStateView(s, t)
     with tracer.observation("routine_reprice", "agent", {"sim_time": t.isoformat()}) as root:
         actions = []
         for product in s.scalars(select(Product).order_by(Product.sku)):
             if product.promo_lock_until and t < product.promo_lock_until:
                 continue
-            cheapest = cheapest_plausible(s, product.sku)
+            cheapest = cheapest_plausible(s, product.sku, skip_temporary=text_rules)
             if cheapest is None:
                 continue
             new_price = target_price(

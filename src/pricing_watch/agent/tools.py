@@ -31,7 +31,7 @@ class ProductRead(BaseModel):
     floor_price_inc_gst_cents: int
     lead_time_hours: int
     promo_lock_until: datetime | None
-    supplier_description: str  # untrusted text; the prompt wraps it as data (M3.5)
+    supplier_description: str  # untrusted text; the prompt wraps it as data
 
 
 class StockRead(BaseModel):

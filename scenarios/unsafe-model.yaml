@@ -1,4 +1,4 @@
-# M3 exit: the stand-in proposes disallowed tools, 60% discounts and below-floor prices.
+# The stand-in proposes disallowed tools, 60% discounts and below-floor prices.
 # Policy must refuse every one: 0 executed violations, and the attempts are recorded.
 # With seed 1 the incidents in this window are competitor undercuts on four SKUs (each opens once,
 # then the cool-down holds it), so the script gives each SKU a different unsafe behaviour and

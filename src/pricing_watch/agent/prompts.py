@@ -1,7 +1,7 @@
 """Prompt templates (S2) and the incident summary sent to the model.
 
 The templates use Langfuse's {{variable}} syntax. These local copies are the fallback when Prompt
-Management is unreachable (wired in M4.5). Text from outside the business goes in escaped
+Management is unreachable. Text from outside the business goes in escaped
 <supplier_data>, <competitor_note> and <supplier_notice> blocks, so it can't close its block and
 pose as instructions.
 """

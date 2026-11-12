@@ -75,7 +75,7 @@ class CatalogueItem:
     base_daily_demand: float
     plausible_low_cents: int
     plausible_high_cents: int
-    supplier_description: str  # the prompt-injection fault (M1.7) appends to this text
+    supplier_description: str  # the prompt-injection fault appends to this text
     promo_lock_until: datetime | None
 
 

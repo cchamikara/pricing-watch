@@ -17,15 +17,18 @@ MIN_HISTORY_HOURS = 24
 
 
 def reorder(s: Session, sku: str, qty: int, t: datetime) -> InboundOrder:
-    lead = timedelta(hours=s.get_one(Product, sku).lead_time_hours)
-    order = InboundOrder(sku=sku, qty=qty, eta=t + lead)
+    """Order at today's supplier cost, which holds even if the cost rises before delivery."""
+    product = s.get_one(Product, sku)
+    order = InboundOrder(sku=sku, qty=qty, eta=t + timedelta(hours=product.lead_time_hours),
+                         unit_cost_ex_gst_cents=product.cost_ex_gst_cents)  # fmt: skip
     s.add(order)
     s.flush()
     return order
 
 
 def receive_arrivals(s: Session, t: datetime) -> list[InboundOrder]:
-    """Move every order due by t into stock on hand, and return those delivered.
+    """Move every order due by t into stock on hand, and return those delivered. Stock is valued
+    at the weighted average of what it cost.
 
     A discontinued SKU's supplier never ships orders placed from its cut-off on: they vanish
     when due, so ignoring the notice costs stock.
@@ -35,7 +38,13 @@ def receive_arrivals(s: Session, t: datetime) -> list[InboundOrder]:
         product = s.get_one(Product, order.sku)
         placed = order.eta - timedelta(hours=product.lead_time_hours)
         if product.discontinued_from is None or placed < product.discontinued_from:
-            s.get_one(StockLevel, order.sku).on_hand += order.qty
+            stock = s.get_one(StockLevel, order.sku)
+            held = stock.avg_cost_ex_gst_cents or product.cost_ex_gst_cents
+            bought = order.unit_cost_ex_gst_cents or product.cost_ex_gst_cents
+            total = stock.on_hand + order.qty
+            if total:  # weighted average of what's on the shelf and what just arrived
+                stock.avg_cost_ex_gst_cents = (stock.on_hand * held + order.qty * bought) // total
+            stock.on_hand = total
             delivered.append(order)
         s.delete(order)
     s.flush()

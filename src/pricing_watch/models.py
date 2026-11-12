@@ -32,6 +32,8 @@ class StockLevel(Base):
     __tablename__ = "stock_level"
     sku: Mapped[str] = mapped_column(ForeignKey("product.sku"), primary_key=True)
     on_hand: Mapped[int]
+    # what the stock on hand cost, on average; None: the supplier's current cost (no change yet)
+    avg_cost_ex_gst_cents: Mapped[int | None] = mapped_column(default=None)
 
 
 class InboundOrder(Base):
@@ -40,6 +42,8 @@ class InboundOrder(Base):
     sku: Mapped[str] = mapped_column(ForeignKey("product.sku"))
     qty: Mapped[int]
     eta: Mapped[datetime]
+    # the supplier's cost when ordered, kept even if it rises before delivery; None: current cost
+    unit_cost_ex_gst_cents: Mapped[int | None] = mapped_column(default=None)
 
 
 class CompetitorPrice(Base):

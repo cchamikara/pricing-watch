@@ -1,4 +1,4 @@
-"""Tracing seam. Code emits observations through a Tracer; Langfuse plugs in behind it in M4."""
+"""Tracing seam. Code emits observations through a Tracer; Langfuse plugs in behind it."""
 
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager

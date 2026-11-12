@@ -30,6 +30,7 @@ class ScenarioConfig(BaseModel):
     model: Literal["stand-in", "claude", "gemini"] = "stand-in"
     model_script: list[ScriptStep] = []  # the stand-in's script; real models ignore it
     supplier_notices: list[NoticeConfig] = []  # text, plus the change it announces (hidden)
+    text_rules: bool = False  # the rules read text by keyword; default: they ignore it
 
     def fault_schedule(self) -> list[Fault]:
         return [

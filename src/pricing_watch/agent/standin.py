@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from pricing_watch.agent.model import Brief, Message, ModelResponse, ModelTimeout
+from pricing_watch.sim.keywords import stock_up_qty
 
 Behaviour = Literal[
     "default",
@@ -96,13 +97,14 @@ def _heed(b: Brief) -> dict[str, Any]:
             out["proposals"] = [_proposal("request_review", "discontinued",
                                           {"sku": b.sku, "reason": reason})]  # fmt: skip
             out["message"] = {"severity": "action_needed", "text": f"{b.sku}: {reason}"}
-        elif (pct := _PCT.search(text)) and _RISE.search(text):
-            price = math.ceil(b.product.price_inc_gst_cents * (1 + float(pct.group(1)) / 100))
-            args = {"sku": b.sku, "new_price_inc_gst_cents": price}
-            out["proposals"] = [_proposal("propose_price_change", "pass on the cost rise", args)]
+        elif (pct := _PCT.search(text)) and _RISE.search(text) and b.stock:
+            qty = stock_up_qty(b.forecast_daily, b.stock.on_hand, b.stock.inbound_qty)
+            if qty > 0:  # buy at today's cost: stock keeps the cost it was bought at
+                args = {"sku": b.sku, "qty": qty}
+                out["proposals"] = [_proposal("propose_reorder", "stock up before the rise", args)]
             out["message"] = {"severity": "warn",
                               "text": f"{b.sku}: supplier cost rises {pct.group(1)}%; "
-                                      f"raising the price to keep the margin."}  # fmt: skip
+                                      f"stocking up at today's cost."}  # fmt: skip
     elif b.kind == "competitor_undercut" and any(_SALE.search(n.lower()) for n in b.notes):
         why = "the undercut is a temporary sale, according to the competitor's note"
         out["message"] = {"severity": "info", "text": f"{b.sku}: {why}; holding our price."}
