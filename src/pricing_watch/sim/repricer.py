@@ -5,7 +5,8 @@ below the margin floor and never more than the policy's daily step from the star
 Call it after a competitor publish; the executor writes the authoritative snapshot (S3).
 """
 
-from datetime import datetime
+from collections.abc import Collection
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, func, select
@@ -37,6 +38,8 @@ from pricing_watch.sim.stock import reorder
 from pricing_watch.tracing import Tracer
 
 BAND_PCT = (98, 102)  # target range as % of the cheapest plausible competitor price
+DROP_PCT = 10  # a competitor price this far under its 7-day high is a sharp drop
+DROP_WINDOW = timedelta(days=7)
 
 
 def target_price(
@@ -168,16 +171,44 @@ def _charge_markdown(
     return spent
 
 
+def dropped_skus(s: Session, t: datetime) -> set[str]:
+    """SKUs where a competitor's latest plausible price is more than DROP_PCT under that
+    competitor's own highest plausible price in the last DROP_WINDOW: a sale, or a real cut."""
+    high = dict(
+        s.execute(
+            select(CompetitorPrice.competitor_id + "|" + CompetitorPrice.sku,
+                   func.max(CompetitorPrice.price_inc_gst_cents))
+            .where(CompetitorPrice.plausible, CompetitorPrice.published_at > t - DROP_WINDOW,
+                   CompetitorPrice.published_at <= t)
+            .group_by(CompetitorPrice.competitor_id, CompetitorPrice.sku)
+        ).all()
+    )  # fmt: skip
+    return {
+        r.sku
+        for sku in {k.split("|", 1)[1] for k in high}
+        for r in latest_prices(s, sku)
+        if r.plausible
+        and r.price_inc_gst_cents * 100 < high[f"{r.competitor_id}|{sku}"] * (100 - DROP_PCT)
+    }
+
+
 def reprice(
-    s: Session, tracer: Tracer, t: datetime, config: PolicyConfig, *, text_rules: bool = False
+    s: Session,
+    tracer: Tracer,
+    t: datetime,
+    config: PolicyConfig,
+    *,
+    text_rules: bool = False,
+    defer: Collection[str] = frozenset(),
 ) -> list[Action]:
     """Propose a band price for each SKU; policy decides, allowed ones execute now. With
-    text_rules, competitor prices whose note looks temporary are not followed."""
+    text_rules, competitor prices whose note looks temporary are not followed. SKUs in defer are
+    left alone: in agent mode the agent decides on sharp competitor drops."""
     view = DbStateView(s, t)
     with tracer.observation("routine_reprice", "agent", {"sim_time": t.isoformat()}) as root:
         actions = []
         for product in s.scalars(select(Product).order_by(Product.sku)):
-            if product.promo_lock_until and t < product.promo_lock_until:
+            if product.sku in defer or (product.promo_lock_until and t < product.promo_lock_until):
                 continue
             cheapest = cheapest_plausible(s, product.sku, skip_temporary=text_rules)
             if cheapest is None:

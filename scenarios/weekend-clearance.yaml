@@ -1,0 +1,13 @@
+# Competitors run a weekend sale (5-6 December), announced only in their listing notes, in
+# messy wording. Rules follow the cut; keyword rules skip it when a keyword matches; the agent
+# decides on each sharp drop and, reading the notes, holds its price for a temporary sale.
+# Whether holding pays depends on how many customers the sale draws away; compare prints it.
+id: weekend-clearance
+seed: 1
+days: 7
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in
+model_script:
+  - kind: competitor_price_drop  # read the sale notes on drops; use --model for a real model
+    behaviour: heed_notes

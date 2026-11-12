@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from pricing_watch.agent.model import Brief, Message, ModelResponse, ModelTimeout
 from pricing_watch.sim.keywords import stock_up_qty
+from pricing_watch.sim.repricer import target_price
 
 Behaviour = Literal[
     "default",
@@ -27,6 +28,7 @@ Behaviour = Literal[
 ]
 NAME = "stand-in"
 EXTRA_COVER_DAYS = 14  # reorders aim for lead time plus this much cover
+MAX_STEP_PCT = 20  # the policy's daily step; the stand-in has no policy read to take it from
 
 
 class ScriptStep(BaseModel):
@@ -60,6 +62,17 @@ def _default(b: Brief) -> dict[str, Any]:
     elif b.kind == "slow_mover" and b.sku and not _locked(b):
         proposals.append(_promotion(b, 5))
         severity, text = "info", f"Running a 5% promotion on {b.sku} for two days."
+    elif (
+        b.kind == "competitor_price_drop" and b.product and b.cheapest_plausible and not _locked(b)
+    ):
+        # follow the drop into the band, as the rules repricer would (it can't read notes)
+        p = b.product
+        new = target_price(p.price_inc_gst_cents, p.price_inc_gst_cents, b.cheapest_plausible,
+                           p.floor_price_inc_gst_cents, MAX_STEP_PCT)  # fmt: skip
+        if new:
+            follow = {"sku": b.sku, "new_price_inc_gst_cents": new}
+            proposals.append(_proposal("propose_price_change", "follow the competitor", follow))
+        severity, text = "info", f"{b.sku}: a competitor cut its price; following it."
     elif b.kind in ("competitor_undercut", "margin_erosion"):
         severity, text = (
             "warn",
@@ -105,7 +118,10 @@ def _heed(b: Brief) -> dict[str, Any]:
             out["message"] = {"severity": "warn",
                               "text": f"{b.sku}: supplier cost rises {pct.group(1)}%; "
                                       f"stocking up at today's cost."}  # fmt: skip
-    elif b.kind == "competitor_undercut" and any(_SALE.search(n.lower()) for n in b.notes):
+    elif b.kind in ("competitor_undercut", "competitor_price_drop") and any(
+        _SALE.search(n.lower()) for n in b.notes
+    ):
+        out["proposals"] = []  # a temporary sale: don't follow it
         why = "the undercut is a temporary sale, according to the competitor's note"
         out["message"] = {"severity": "info", "text": f"{b.sku}: {why}; holding our price."}
     return out

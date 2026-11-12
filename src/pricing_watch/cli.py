@@ -1,6 +1,7 @@
 """Command line.
 
 pricing-watch sim run --scenario scenarios/smoke-7d.yaml [--seed N] [--db run.db] [--model M]
+pricing-watch sim compare --scenario scenarios/supplier-cost-rise.yaml [--seed N] [--model M]
 pricing-watch approvals list|approve ID|reject ID --db run.db [--note TEXT]
 """
 
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 from pricing_watch.approvals.queue import decide, pending
 from pricing_watch.models import PolicyDecision, Proposal, SalesTick, make_engine
 from pricing_watch.policy.config import load_policy
-from pricing_watch.sim.run import AGENT_HOUR, WARMUP_DAYS, run_scenario
+from pricing_watch.sim.run import AGENT_HOUR, WARMUP_DAYS, compare, run_scenario
 from pricing_watch.sim.scenario import load_scenario
 from pricing_watch.tracing import NoopTracer
 
@@ -31,6 +32,11 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--db", type=Path, help="save the run to this new SQLite file")
     run.add_argument("--model", choices=["stand-in", "claude", "gemini"],
                      help="override the scenario's model (agent mode only)")  # fmt: skip
+    cmp = sim.add_parser("compare", help="run a scenario against every baseline, same seed")
+    cmp.add_argument("--scenario", type=Path, required=True, help="path to a scenario YAML")
+    cmp.add_argument("--seed", type=int, help="override the scenario's seed")
+    cmp.add_argument("--model", choices=["stand-in", "claude", "gemini"],
+                     help="the agent's model for the last run")  # fmt: skip
     approvals = groups.add_parser("approvals").add_subparsers(dest="command", required=True)
     approvals.add_parser("list").add_argument("--db", type=Path, required=True)
     for verb in ("approve", "reject"):
@@ -40,7 +46,9 @@ def main(argv: list[str] | None = None) -> None:
         cmd.add_argument("--note", default="")
     args = parser.parse_args(argv)
 
-    if args.group == "sim":
+    if args.group == "sim" and args.command == "compare":
+        _sim_compare(args)
+    elif args.group == "sim":
         _sim_run(args)
     elif args.command == "list":
         _approvals_list(args.db)
@@ -80,6 +88,23 @@ def _sim_run(args: argparse.Namespace) -> None:
     print("sell-through")
     for sku, share in summary.sell_through.items():
         print(f"  {sku}  {share:6.1%}")
+
+
+def _sim_compare(args: argparse.Namespace) -> None:
+    config = load_scenario(args.scenario)
+    if args.seed is not None:
+        config = config.model_copy(update={"seed": args.seed})
+    if args.model:
+        config = config.model_copy(update={"model": args.model})
+    print(f"scenario {config.id}  seed {config.seed}  {config.days} days")
+    runs = compare(config)
+    base = runs["rules, ignoring text"].gross_margin_ex_gst_cents
+    header = ("run", "gross margin ex GST", "vs rules", "stockout h", "incidents")
+    print(f"{header[0]:22} {header[1]:>20} {header[2]:>12} {header[3]:>11} {header[4]:>10}")
+    for label, sm in runs.items():
+        delta = (sm.gross_margin_ex_gst_cents - base) / 100
+        print(f"{label:22} {sm.gross_margin_ex_gst_cents / 100:>20,.2f} {delta:>+12,.2f} "
+              f"{sm.stockout_sku_hours:>11} {sm.incidents:>10}")  # fmt: skip
 
 
 def _open(db: Path) -> Session:

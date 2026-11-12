@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from pricing_watch.agent.loop import handle_incident
 from pricing_watch.agent.model import ClaudeProvider, GeminiProvider, ModelProvider
 from pricing_watch.agent.standin import StandInModel
-from pricing_watch.agent.triggers import detect
+from pricing_watch.agent.triggers import awaiting_agent, detect
 from pricing_watch.approvals.queue import scripted_review
 from pricing_watch.clock import TickClock
 from pricing_watch.models import (
@@ -37,7 +37,7 @@ from pricing_watch.sim.faults import apply_feed_faults, observed_stock
 from pricing_watch.sim.keywords import cost_rise_pct, discontinued_skus, stock_up_qty
 from pricing_watch.sim.loop import run
 from pricing_watch.sim.promotions import active_discounts
-from pricing_watch.sim.repricer import cheapest_plausible, execute, reprice
+from pricing_watch.sim.repricer import cheapest_plausible, dropped_skus, execute, reprice
 from pricing_watch.sim.scenario import ScenarioConfig
 from pricing_watch.sim.stock import days_of_cover, forecast_daily_demand, receive_arrivals, reorder
 from pricing_watch.sim.suppliers import supplier_events
@@ -166,7 +166,12 @@ def run_scenario(
 
     def repricer(t: datetime) -> None:
         if published:
-            reprice(s, tracer, t, policy, text_rules=config.text_rules)
+            agent_decides = (
+                awaiting_agent(s, t, dropped_skus(s, t))
+                if config.mode == "agent" and t >= config.start  # the agent isn't on in warm-up
+                else set()
+            )
+            reprice(s, tracer, t, policy, text_rules=config.text_rules, defer=agent_decides)
             scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all")
 
     model = _model(config)
@@ -225,6 +230,20 @@ def _stock_up_before_cost_rises(
             )  # fmt: skip
             if decision.decision == "allowed":
                 execute(s, tracer, proposal, t)
+
+
+def compare(config: ScenarioConfig) -> dict[str, Summary]:
+    """Run the scenario against every baseline, same seed. "Agent, ignoring text" is the
+    like-for-like baseline for reading text: the same agent mode with a stand-in that ignores it.
+    """
+    variants: dict[str, dict[str, object]] = {
+        "rules, ignoring text": {"mode": "rules", "model_script": [], "text_rules": False},
+        "rules, keywords": {"mode": "rules", "model_script": [], "text_rules": True},
+        "agent, ignoring text": {"mode": "agent", "model": "stand-in", "model_script": [],
+                                 "text_rules": False},
+        f"agent ({config.model})": {"mode": "agent", "text_rules": False},
+    }  # fmt: skip
+    return {label: run_scenario(config.model_copy(update=v)) for label, v in variants.items()}
 
 
 def _model(config: ScenarioConfig) -> ModelProvider:

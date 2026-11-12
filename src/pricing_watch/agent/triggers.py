@@ -12,9 +12,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pricing_watch.models import (
+    Action,
     InboundOrder,
     Incident,
     Product,
+    Proposal,
     SalesTick,
     StockLevel,
     SupplierNotice,
@@ -22,7 +24,7 @@ from pricing_watch.models import (
 from pricing_watch.money import floor_price
 from pricing_watch.policy.rules import IncidentContext
 from pricing_watch.sim.catalogue import PLAUSIBLE_BAND
-from pricing_watch.sim.repricer import BAND_PCT, latest_prices
+from pricing_watch.sim.repricer import BAND_PCT, dropped_skus, latest_prices
 from pricing_watch.sim.stock import forecast_daily_demand
 
 WINDOW = timedelta(days=7)
@@ -78,6 +80,8 @@ def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Inciden
             fired.append(("margin_erosion", category, None))
 
     fired += _notice_keys(s, t)
+    category_by_sku = dict(s.execute(select(Product.sku, Product.category)).all())
+    fired += [("competitor_price_drop", category_by_sku[k], k) for k in sorted(dropped_skus(s, t))]
     quiet = (Incident.kind != "supplier_notice") & (
         Incident.closed_at.is_(None) | (Incident.closed_at > t - COOLDOWN)
     )  # each notice is its own event: _notice_keys dedupes those
@@ -135,6 +139,32 @@ def _runs_out(
             return True  # empty before this delivery arrives
         stock += qty
     return stock < per_hour * ((horizon - t) / timedelta(hours=1))
+
+
+def awaiting_agent(s: Session, t: datetime, dropped: set[str]) -> set[str]:
+    """Of the SKUs with a sharp competitor drop, those the repricer leaves to the agent: not yet
+    decided, or held (no price change executed) within the cool-down. A SKU whose drop the
+    agent followed goes back to the repricer."""
+    waiting = set()
+    for sku in dropped:
+        last = s.scalars(
+            select(Incident)
+            .where(Incident.kind == "competitor_price_drop", Incident.sku == sku)
+            .order_by(Incident.opened_at.desc(), Incident.id.desc())
+            .limit(1)
+        ).first()
+        if last is None or last.closed_at is None:
+            waiting.add(sku)
+            continue
+        followed = s.scalar(
+            select(func.count())
+            .select_from(Action)
+            .join(Proposal, Proposal.id == Action.proposal_id)
+            .where(Proposal.incident_id == last.id, Action.tool == "propose_price_change")
+        )
+        if not followed and last.closed_at > t - COOLDOWN:
+            waiting.add(sku)
+    return waiting
 
 
 def incident_context(s: Session, incident: Incident) -> IncidentContext:

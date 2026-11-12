@@ -50,19 +50,20 @@ def rules_plan(
         reorder = ProposalOut(tool="propose_reorder", args=args, reason=f"cover {days:g} days")
         return plan("warn", f"{b.sku}: reordering {qty} to avoid a stock-out.", reorder)
 
-    if b.kind == "competitor_undercut" and locked:
-        return plan("warn", f"{b.sku}: undercut, but its promotion lock holds the price.")
-    if b.kind == "competitor_undercut":
+    competitor_moved = b.kind in ("competitor_undercut", "competitor_price_drop")
+    if competitor_moved and locked:
+        return plan("warn", f"{b.sku}: {b.kind}, but its promotion lock holds the price.")
+    if competitor_moved:  # rules can't read notes: follow the competitor like the repricer
         quotes = competitors.prices if competitors else []
         cheapest = min((q.price_inc_gst_cents for q in quotes if q.plausible), default=None)
         new = cheapest and target_price(p.price_inc_gst_cents, view.start_of_day_price(b.sku),
                                         cheapest, p.floor_price_inc_gst_cents,
                                         policy.max_daily_step_pct)  # fmt: skip
         if not new:
-            return plan("warn", f"{b.sku}: undercut, but the price is as low as the rules allow.")
+            return plan("warn", f"{b.sku}: {b.kind}, but the price is as low as the rules allow.")
         args = {"sku": b.sku, "new_price_inc_gst_cents": new}
         cut = ProposalOut(tool="propose_price_change", args=args, reason=f"cheapest {cheapest}")
-        return plan("warn", f"{b.sku}: undercut; repricing to {new / 100:.2f}.", cut)
+        return plan("warn", f"{b.sku}: {b.kind}; repricing to {new / 100:.2f}.", cut)
 
     if b.kind == "slow_mover":
         promo = Promotion(skus=[b.sku], discount_pct=PROMO_PCT, start=b.now,
