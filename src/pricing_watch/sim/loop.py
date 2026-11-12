@@ -4,7 +4,7 @@ Every tick runs the hooks in this fixed order, then advances the clock by one ho
 
 1. competitor_feed: competitors publish (the hook itself decides every 6 h)
 2. demand: draw demand and record sales
-3. replenishment: inbound orders arrive
+3. replenishment: supplier notices and changes, then inbound orders arrive
 4. repricer: the rules repricer reacts
 5. triggers: detect incident conditions
 6. incidents: handle open incidents

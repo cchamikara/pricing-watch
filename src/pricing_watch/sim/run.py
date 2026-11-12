@@ -36,6 +36,7 @@ from pricing_watch.sim.promotions import active_discounts
 from pricing_watch.sim.repricer import cheapest_plausible, reprice
 from pricing_watch.sim.scenario import ScenarioConfig
 from pricing_watch.sim.stock import days_of_cover, forecast_daily_demand, receive_arrivals, reorder
+from pricing_watch.sim.suppliers import supplier_events
 from pricing_watch.tracing import NoopTracer, Tracer
 
 OPENING_STOCK_DAYS = 14  # beyond the lead time, so the first reorder lands before running out
@@ -127,12 +128,13 @@ def run_scenario(
                     units_sold=sold,
                     lost_units=lost,
                     revenue_ex_gst_cents=ex_from_inc(Cents(price)) * sold,
-                    cogs_cents=i.cost_ex_gst_cents * sold,
+                    cogs_cents=products[i.sku].cost_ex_gst_cents * sold,  # after any cost rise
                 )
             )
         s.flush()
 
     def replenishment(t: datetime) -> None:
+        supplier_events(s, config.supplier_notices, config.start, t)
         for order in receive_arrivals(s, t):
             if t >= config.start:
                 received[order.sku] += order.qty

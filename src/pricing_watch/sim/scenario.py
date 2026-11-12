@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from pricing_watch.agent.standin import ScriptStep
 from pricing_watch.sim.faults import Fault, FaultKind
+from pricing_watch.sim.suppliers import NoticeConfig
 
 
 class FaultConfig(BaseModel):
@@ -28,6 +29,7 @@ class ScenarioConfig(BaseModel):
     mode: Literal["rules", "agent"] = "rules"  # agent: the incident loop runs alongside the rules
     model: Literal["stand-in", "claude", "gemini"] = "stand-in"
     model_script: list[ScriptStep] = []  # the stand-in's script; real models ignore it
+    supplier_notices: list[NoticeConfig] = []  # text, plus the change it announces (hidden)
 
     def fault_schedule(self) -> list[Fault]:
         return [

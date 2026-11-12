@@ -25,13 +25,21 @@ def reorder(s: Session, sku: str, qty: int, t: datetime) -> InboundOrder:
 
 
 def receive_arrivals(s: Session, t: datetime) -> list[InboundOrder]:
-    """Move every order due by t into stock on hand."""
-    due = list(s.scalars(select(InboundOrder).where(InboundOrder.eta <= t)))
-    for order in due:
-        s.get_one(StockLevel, order.sku).on_hand += order.qty
+    """Move every order due by t into stock on hand, and return those delivered.
+
+    A discontinued SKU's supplier never ships orders placed from its cut-off on: they vanish
+    when due, so ignoring the notice costs stock.
+    """
+    delivered = []
+    for order in s.scalars(select(InboundOrder).where(InboundOrder.eta <= t)):
+        product = s.get_one(Product, order.sku)
+        placed = order.eta - timedelta(hours=product.lead_time_hours)
+        if product.discontinued_from is None or placed < product.discontinued_from:
+            s.get_one(StockLevel, order.sku).on_hand += order.qty
+            delivered.append(order)
         s.delete(order)
     s.flush()
-    return due
+    return delivered
 
 
 def forecast_daily_demand(s: Session, sku: str, t: datetime) -> float:

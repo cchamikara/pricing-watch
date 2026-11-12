@@ -24,6 +24,8 @@ class Product(Base):
     lead_time_hours: Mapped[int]
     supplier_description: Mapped[str]
     promo_lock_until: Mapped[datetime | None]
+    # hidden truth: when the supplier stopped taking orders. Simulator-only; no read tool shows it
+    discontinued_from: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class StockLevel(Base):
@@ -49,6 +51,17 @@ class CompetitorPrice(Base):
     published_at: Mapped[datetime]
     plausible: Mapped[bool]
     note: Mapped[str] = mapped_column(default="")  # the listing's free text; untrusted
+
+
+class SupplierNotice(Base):
+    """What a supplier told us, as text. The change it announces is simulator-only state."""
+
+    __tablename__ = "supplier_notice"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sku: Mapped[str | None] = mapped_column(ForeignKey("product.sku"))  # or a whole category
+    category: Mapped[str | None]
+    sent_at: Mapped[datetime]
+    text: Mapped[str]  # untrusted, free text
 
 
 class Incident(Base):
