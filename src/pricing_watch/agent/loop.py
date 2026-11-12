@@ -116,7 +116,8 @@ def _work(
         fc = reads.get_demand_forecast(incident.sku)
         found += [product, stock, competitors, fc]
         forecast = fc.daily_units
-    # shortcut: a category incident reads only the policy; add per-SKU reads if the model needs them
+    # shortcut: a category incident reads only its notices and the policy, no per-SKU reads
+    found.append(reads.get_supplier_notices(incident.category, incident.sku))
     policy = reads.get_policy()
     found.append(policy)
     brief = Brief(kind=incident.kind, category=incident.category, sku=incident.sku, now=t,

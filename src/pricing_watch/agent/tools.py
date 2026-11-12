@@ -7,9 +7,10 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pricing_watch.models import Product
+from pricing_watch.models import Product, SupplierNotice
 from pricing_watch.money import floor_price
 from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.rules import DbStateView
@@ -17,6 +18,8 @@ from pricing_watch.sim.faults import Fault, observed_description, observed_stock
 from pricing_watch.sim.repricer import latest_prices
 from pricing_watch.sim.stock import FORECAST_WINDOW, days_of_cover
 from pricing_watch.tracing import Tracer
+
+NOTICE_WINDOW = timedelta(days=14)  # supplier notices older than this are left out
 
 
 class ProductRead(BaseModel):
@@ -44,6 +47,7 @@ class CompetitorQuote(BaseModel):
     published_at: datetime
     age_hours: int
     plausible: bool
+    note: str  # the listing's free text; untrusted, so the prompt wraps it as data
 
 
 class CompetitorRead(BaseModel):
@@ -55,6 +59,20 @@ class ForecastRead(BaseModel):
     sku: str
     daily_units: float
     window_days: int
+
+
+class NoticeQuote(BaseModel):
+    sku: str | None
+    category: str | None  # set when the notice covers a whole range
+    sent_at: datetime
+    age_hours: int
+    text: str  # untrusted; the prompt wraps it as data
+
+
+class SupplierNoticesRead(BaseModel):
+    category: str
+    sku: str | None
+    notices: list[NoticeQuote]  # oldest first
 
 
 class PolicyRead(BaseModel):
@@ -112,7 +130,8 @@ class ReadTools:
             quotes = [
                 CompetitorQuote(competitor_id=r.competitor_id, published_at=r.published_at,
                                 price_inc_gst_cents=r.price_inc_gst_cents, plausible=r.plausible,
-                                age_hours=(self._t - r.published_at) // timedelta(hours=1))
+                                age_hours=(self._t - r.published_at) // timedelta(hours=1),
+                                note=r.note)
                 for r in latest_prices(self._s, sku)
             ]  # fmt: skip
             return CompetitorRead(sku=sku, prices=quotes)
@@ -123,6 +142,31 @@ class ReadTools:
         return self._traced("get_demand_forecast", sku, lambda: ForecastRead(
             sku=sku, daily_units=self._view.forecast_daily(sku), window_days=FORECAST_WINDOW.days
         ))  # fmt: skip
+
+    def get_supplier_notices(self, category: str, sku: str | None = None) -> SupplierNoticesRead:
+        """Notices sent in the last NOTICE_WINDOW for the range, and for the SKU if given."""
+
+        def read() -> SupplierNoticesRead:
+            scope = SupplierNotice.category == category
+            if sku:
+                scope |= SupplierNotice.sku == sku
+            else:  # a range incident: notices about any SKU in it count too
+                in_range = select(Product.sku).where(Product.category == category)
+                scope |= SupplierNotice.sku.in_(in_range)
+            rows = self._s.scalars(
+                select(SupplierNotice)
+                .where(scope, SupplierNotice.sent_at <= self._t,
+                       SupplierNotice.sent_at > self._t - NOTICE_WINDOW)
+                .order_by(SupplierNotice.sent_at, SupplierNotice.id)
+            )  # fmt: skip
+            notices = [
+                NoticeQuote(sku=n.sku, category=n.category, sent_at=n.sent_at, text=n.text,
+                            age_hours=(self._t - n.sent_at) // timedelta(hours=1))
+                for n in rows
+            ]  # fmt: skip
+            return SupplierNoticesRead(category=category, sku=sku, notices=notices)
+
+        return self._traced("get_supplier_notices", sku, read)
 
     def get_policy(self) -> PolicyRead:
         def read() -> PolicyRead:
