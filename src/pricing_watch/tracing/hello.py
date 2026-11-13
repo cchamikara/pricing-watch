@@ -5,6 +5,8 @@ import time
 
 from langfuse import Langfuse, propagate_attributes
 
+from pricing_watch.tracing.langfuse_tracer import langfuse_client
+
 ENVIRONMENTS = ("sim", "ci", "heartbeat")
 
 
@@ -33,7 +35,7 @@ def arrived(lf: Langfuse, trace_id: str, environment: str, wait_s: float = 60) -
 
 
 def check(environments: tuple[str, ...] = ENVIRONMENTS) -> dict[str, bool]:
-    lf = Langfuse()
+    lf = langfuse_client()  # the hello traces take the app's route: through the Collector
     if not lf.auth_check():
         raise SystemExit("Langfuse rejected the keys; run with: uv run --env-file deploy/.env")
     sent = {env: send_hello(lf, env) for env in environments}

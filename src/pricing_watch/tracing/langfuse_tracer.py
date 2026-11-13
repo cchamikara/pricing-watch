@@ -5,15 +5,29 @@ generation's model and token usage, which go to Langfuse's own fields so it can 
 them. An exception marks the observation as an error before it propagates.
 """
 
+import os
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from typing import Any
 
 from langfuse import Langfuse, propagate_attributes
 from langfuse.types import TraceContext
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 from pricing_watch.tracing import Observation, ObservationType
 from pricing_watch.tracing.contract import TraceInfo, trace_id
+
+
+def langfuse_client(**options: Any) -> Langfuse:
+    """API calls (prompts, lookups) go to LANGFUSE_BASE_URL; spans go only to the local Collector
+    (OTEL_COLLECTOR_ENDPOINT), which queues them on disk and forwards them, so an outage or a
+    restart doesn't lose them. The SDK still applies its masking hook before they leave."""
+    endpoint = os.environ.get("OTEL_COLLECTOR_ENDPOINT")
+    if not endpoint:
+        raise SystemExit("OTEL_COLLECTOR_ENDPOINT is not set: spans go through the Collector "
+                         "only; run with uv run --env-file deploy/.env")  # fmt: skip
+    return Langfuse(span_exporter=OTLPSpanExporter(endpoint=endpoint), **options)
+
 
 # our usage keys (the providers' names) -> the keys Langfuse prices tokens by
 _USAGE_KEYS = {"input_tokens": "input", "output_tokens": "output"}

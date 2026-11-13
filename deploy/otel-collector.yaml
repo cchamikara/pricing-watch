@@ -1,0 +1,40 @@
+# OpenTelemetry Collector between the app and Langfuse. The app sends OTLP here (port 4318);
+# the Collector adds Langfuse's auth and forwards. Its sending queue is on disk (file_storage on
+# a mounted volume) and retries never stop, so spans survive a Langfuse or network outage and a
+# Collector restart, and are delivered once Langfuse is reachable again.
+
+extensions:
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    create_directory: true
+    timeout: 10s
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlp_http/langfuse:
+    # Langfuse's OTLP endpoint; the exporter appends /v1/traces
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      Authorization: "Basic ${env:LANGFUSE_OTLP_AUTH}"  # base64 of public_key:secret_key
+      x-langfuse-ingestion-version: "4"
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0  # never give up: an outage only delays delivery
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue  # on disk, so a restart keeps what is waiting
+      queue_size: 10000
+
+service:
+  extensions: [file_storage/queue]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp_http/langfuse]

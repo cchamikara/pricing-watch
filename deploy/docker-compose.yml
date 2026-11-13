@@ -45,6 +45,22 @@ x-depends-on: &depends-on
   clickhouse: {condition: service_healthy}
 
 services:
+  # the app sends spans here (http://localhost:4318); see otel-collector.yaml
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    restart: always
+    command: ["--config=/etc/otelcol/config.yaml"]
+    # shortcut: root, so it can create its queue directory on the fresh named volume; run as
+    # the image's own user with a pre-owned volume before deploying anywhere shared
+    user: "0:0"
+    environment:
+      LANGFUSE_OTLP_AUTH: ${LANGFUSE_OTLP_AUTH:?run make langfuse-env}
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - otel_queue:/var/lib/otelcol  # the on-disk sending queue: survives restarts
+    ports:
+      - 127.0.0.1:4318:4318
+
   langfuse-worker:
     image: docker.langfuse.com/langfuse/langfuse-worker:${LANGFUSE_IMAGE_TAG:-4.79.0}
     restart: always
@@ -144,6 +160,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
 volumes:
+  otel_queue:
   postgres_data:
   clickhouse_data:
   clickhouse_logs:

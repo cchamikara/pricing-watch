@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> None:
                      help="send the run to Langfuse; needs --env-file deploy/.env")  # fmt: skip
     run.add_argument("--run-name", default="dev",
                      help="a traced run's name; each is traced once per environment")  # fmt: skip
+    run.add_argument("--content-off", action="store_true",
+                     help="with --trace, send prompt and message text as [masked]")  # fmt: skip
     run.add_argument("--prompt-label", choices=["production", "ci"],
                      help="with --trace, the Langfuse prompt label (default: ci in the ci "
                           "environment, else production)")  # fmt: skip
@@ -100,7 +102,7 @@ def _sim_run(args: argparse.Namespace) -> None:
     tracer, trace_run, prompts = None, None, LOCAL_PROMPTS
     if args.trace:
         environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT", "sim")
-        tracer, prompts = _langfuse_tracer(environment, args.prompt_label)
+        tracer, prompts = _langfuse_tracer(environment, args.prompt_label, args.content_off)
         trace_run = RunTrace(environment=environment, run_name=args.run_name,
                              scenario_id=config.id, seed=config.seed)  # fmt: skip
         if tracer.has_trace(trace_run.anchor()):  # the same ids again would duplicate its traces
@@ -148,14 +150,16 @@ def _sim_compare(args: argparse.Namespace) -> None:
               f"{sm.listings_matched_wrong}/{sm.listings_missed}")  # fmt: skip
 
 
-def _langfuse_tracer(environment: str, label: str | None) -> tuple["LangfuseTracer", Prompts]:
+def _langfuse_tracer(
+    environment: str, label: str | None, content_off: bool
+) -> tuple["LangfuseTracer", Prompts]:
     """The tracer, and the prompts fetched by label (the local templates if unavailable)."""
-    from langfuse import Langfuse  # the SDK only when tracing
-
-    from pricing_watch.tracing.langfuse_tracer import LangfuseTracer
+    from pricing_watch.tracing.langfuse_tracer import LangfuseTracer, langfuse_client
+    from pricing_watch.tracing.masking import mask_content
     from pricing_watch.tracing.prompt_store import fetch_prompts
 
-    client = Langfuse(environment=environment)
+    mask = mask_content if content_off else None
+    client = langfuse_client(environment=environment, mask_otel_spans=mask)
     label = label or ("ci" if environment == "ci" else "production")
     return LangfuseTracer(client), fetch_prompts(client, label)
 
