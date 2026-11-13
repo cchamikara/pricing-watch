@@ -54,12 +54,21 @@ def handle_incident(
     incident: Incident,
     t: datetime,
     faults: Sequence[Fault] = (),
+    run: contract.RunTrace | None = None,  # which traced run: seeds the trace id
 ) -> Notification:
     scope = incident.sku or incident.category
+    session = contract.incident_session(incident.category, incident.sku, incident.kind,
+                                        t.date().isoformat())  # fmt: skip
+    trace = contract.root_trace(run, "incident", incident.id, t, str(config.policy_version),
+                                session_id=session, category=incident.category,
+                                sku=incident.sku, incident_kind=incident.kind)  # fmt: skip
+    if trace:
+        incident.trace_id = contract.trace_id(trace.trace_seed)
+        incident.session_id = session
     trigger = {"kind": incident.kind, "category": incident.category, "sku": incident.sku,
                "sim_time": t.isoformat()}  # fmt: skip
     out = _Outcome("action_needed", f"{incident.kind} on {scope}: the agent stopped; please check.")
-    with tracer.observation(*contract.INCIDENT, trigger) as root:
+    with tracer.observation(*contract.INCIDENT, trigger, trace=trace) as root:
         try:
             _work(s, tracer, model, config, incident, t, faults, out)
         except Exception as e:

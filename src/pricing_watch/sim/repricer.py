@@ -214,12 +214,16 @@ def reprice(
     *,
     text_rules: bool = False,
     defer: Collection[str] = frozenset(),
+    run: contract.RunTrace | None = None,
 ) -> list[Action]:
     """Propose a band price for each SKU; policy decides, allowed ones execute now. With
     text_rules, competitor prices whose note looks temporary are not followed. SKUs in defer are
     left alone: in agent mode the agent decides on sharp competitor drops."""
     view = DbStateView(s, t)
-    with tracer.observation(*contract.ROUTINE_REPRICE, {"sim_time": t.isoformat()}) as root:
+    trace = contract.root_trace(run, "reprice", t.isoformat(timespec="minutes"), t,
+                                str(config.policy_version))  # fmt: skip
+    with tracer.observation(*contract.ROUTINE_REPRICE, {"sim_time": t.isoformat()},
+                            trace=trace) as root:  # fmt: skip
         actions = []
         for product in s.scalars(select(Product).order_by(Product.sku)):
             if product.sku in defer or (product.promo_lock_until and t < product.promo_lock_until):

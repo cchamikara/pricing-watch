@@ -44,7 +44,7 @@ from pricing_watch.sim.repricer import dropped_skus, execute, reprice
 from pricing_watch.sim.scenario import ScenarioConfig
 from pricing_watch.sim.stock import days_of_cover, forecast_daily_demand, receive_arrivals, reorder
 from pricing_watch.sim.suppliers import supplier_events
-from pricing_watch.tracing import NoopTracer, Tracer
+from pricing_watch.tracing import NoopTracer, Tracer, contract
 
 OPENING_STOCK_DAYS = 14  # beyond the lead time, so the first reorder lands before running out
 REORDER_COVER_DAYS = 14  # order this many days of forecast demand
@@ -69,10 +69,18 @@ class Summary:
 
 
 def run_scenario(
-    config: ScenarioConfig, tracer: Tracer | None = None, db_url: str = "sqlite://"
+    config: ScenarioConfig,
+    tracer: Tracer | None = None,
+    db_url: str = "sqlite://",
+    trace_run: contract.RunTrace | None = None,  # environment and run name: seed the trace ids
 ) -> Summary:
     tracer = tracer or NoopTracer()
     policy = load_policy()
+    trace_run = (trace_run or contract.RunTrace()).model_copy(
+        update={"scenario_id": config.id, "seed": config.seed})  # seeds every trace id  # fmt: skip
+    start_trace = contract.root_trace(trace_run, "run", 0, config.start, str(policy.policy_version))
+    with tracer.observation(*contract.RUN, config.model_dump(mode="json"), trace=start_trace):
+        pass  # the anchor: `sim run --trace` checks it to refuse tracing a run name twice
     items = generate_catalogue(config.seed, config.start)
     competitors = make_competitors(config.seed, items)
     faults = config.fault_schedule()
@@ -206,8 +214,10 @@ def run_scenario(
                 if config.mode == "agent" and t >= config.start  # the agent isn't on in warm-up
                 else set()
             )
-            reprice(s, tracer, t, policy, text_rules=config.text_rules, defer=agent_decides)
-            scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all")
+            reprice(s, tracer, t, policy, text_rules=config.text_rules, defer=agent_decides,
+                    run=trace_run)  # fmt: skip
+            scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all",
+                            run=trace_run)  # fmt: skip
 
     model = _model(config)
 
@@ -221,9 +231,10 @@ def run_scenario(
     def incidents(t: datetime) -> None:
         open_ = list(s.scalars(select(Incident).where(Incident.closed_at.is_(None))))
         for incident in open_:
-            handle_incident(s, tracer, model, policy, incident, t, faults)
+            handle_incident(s, tracer, model, policy, incident, t, faults, run=trace_run)
         if open_:
-            scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all")
+            scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all",
+                            run=trace_run)  # fmt: skip
 
     run(
         TickClock(config.start - timedelta(days=WARMUP_DAYS)),

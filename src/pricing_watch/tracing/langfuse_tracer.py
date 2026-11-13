@@ -6,12 +6,14 @@ them. An exception marks the observation as an error before it propagates.
 """
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Any
 
-from langfuse import Langfuse
+from langfuse import Langfuse, propagate_attributes
+from langfuse.types import TraceContext
 
 from pricing_watch.tracing import Observation, ObservationType
+from pricing_watch.tracing.contract import TraceInfo, trace_id
 
 # our usage keys (the providers' names) -> the keys Langfuse prices tokens by
 _USAGE_KEYS = {"input_tokens": "input", "output_tokens": "output"}
@@ -40,14 +42,29 @@ class LangfuseTracer:
 
     @contextmanager
     def observation(
-        self, name: str, type: ObservationType, input: object = None
-    ) -> Iterator[Observation]:
-        with self._lf.start_as_current_observation(as_type=type, name=name, input=input) as span:
+        self, name: str, type: ObservationType, input: object = None,
+        trace: TraceInfo | None = None,
+    ) -> Iterator[Observation]:  # fmt: skip
+        with ExitStack() as stack:
+            context: TraceContext | None = None
+            if trace:  # a root: its seeded trace id, session and trace attributes, from the start
+                context = {"trace_id": trace_id(trace.trace_seed)}
+                stack.enter_context(propagate_attributes(
+                    session_id=trace.session_id, tags=trace.tags, trace_name=trace.trace_name,
+                    metadata=trace.attributes.model_dump(exclude_none=True),
+                ))  # fmt: skip
+            span = stack.enter_context(self._lf.start_as_current_observation(
+                as_type=type, name=name, input=input, trace_context=context))  # fmt: skip
             try:
                 yield _Handle(span, generation=type == "generation")
             except BaseException as e:
                 span.update(level="ERROR", status_message=f"{e.__class__.__name__}: {e}")
                 raise
+
+    def has_trace(self, trace_id: str) -> bool:
+        """Whether Langfuse already holds this trace. Ingestion is asynchronous, so a trace sent
+        in the last few seconds may not show yet."""
+        return bool(self._lf.api.observations.get_many(trace_id=trace_id, limit=1).data)
 
     def flush(self) -> None:
         """Send whatever is buffered; call before the process exits."""

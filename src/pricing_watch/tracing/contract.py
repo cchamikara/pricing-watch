@@ -7,6 +7,9 @@ so a name can't be paired with the wrong type. Attributes and outputs are Pydant
 emitters pass `Model(...).model_dump(mode="json")`, so a misspelt key fails type checking.
 """
 
+from datetime import datetime
+from hashlib import sha256
+from importlib.metadata import version
 from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel
@@ -20,6 +23,7 @@ class Obs(NamedTuple):
 
 
 # roots
+RUN = Obs("run", "span")  # each traced run's anchor: its trace id is known in advance
 INCIDENT = Obs("incident", "agent")
 ROUTINE_REPRICE = Obs("routine_reprice", "agent")
 
@@ -50,6 +54,91 @@ def approval_execute(proposal_id: int) -> Obs:
 
 def recheck(proposal_id: int) -> Obs:
     return Obs(f"recheck:{proposal_id}", "guardrail")
+
+
+# traces: identity, session and the attributes known when a trace starts
+
+
+def trace_id(seed: str) -> str:
+    """The SDK's seeded trace id (Langfuse.create_trace_id), without importing the SDK."""
+    return sha256(seed.encode()).digest()[:16].hex()
+
+
+def incident_session(category: str, sku: str | None, kind: str, sim_day: str) -> str:
+    return f"{category}:{sku or '-'}:{kind}:{sim_day}"
+
+
+AGENT_VERSION = version("pricing-watch")
+
+
+class TraceAttributes(BaseModel):
+    """Set when a trace starts and propagated to every observation in it, so Langfuse can
+    filter by them. Outcomes (answer_source, proposal counts) are only known at the end, so
+    they are the root observation's IncidentAttributes instead."""
+
+    scenario_id: str
+    run_name: str
+    sim_time: str
+    agent_version: str
+    policy_version: str
+    category: str | None = None
+    sku: str | None = None
+    incident_kind: str | None = None
+
+
+class TraceInfo(BaseModel):
+    """What a root observation needs to start its trace."""
+
+    trace_seed: str  # "<environment>:<run>:<scenario>:<seed>:<root>:<number>"
+    session_id: str | None = None
+    tags: list[str]  # the run name: one click in Langfuse filters a whole run
+    trace_name: str  # "<scenario> · <root>", so the trace list shows the scenario
+    attributes: TraceAttributes
+
+
+class RunTrace(BaseModel):
+    """Which traced run this is. Its parts seed every trace id: a re-run of the same run name
+    in the same environment repeats them, and any other run never lands in its traces."""
+
+    environment: str = "local"  # the Langfuse environment, so sim and ci never share traces
+    run_name: str = "dev"  # e.g. an experiment's name; `sim run --trace` refuses a name twice
+    scenario_id: str = ""
+    seed: int = 0
+
+    def anchor(self) -> str:
+        """The trace id of the run's opening `run` trace, known before the run starts."""
+        return trace_id(self._seed("run", 0))
+
+    def _seed(self, root: str, number: object) -> str:
+        return f"{self.environment}:{self.run_name}:{self.scenario_id}:{self.seed}:{root}:{number}"
+
+
+def root_trace(
+    run: RunTrace | None,
+    root: str,
+    number: object,
+    t: datetime,
+    policy_version: str,
+    *,
+    session_id: str | None = None,
+    category: str | None = None,
+    sku: str | None = None,
+    incident_kind: str | None = None,
+) -> TraceInfo | None:
+    """A root's trace, seeded by its run, so a re-run of the same run name gives the same ids.
+    No run (say, a CLI approval on an old run's database): None, so a random trace id."""
+    if run is None:
+        return None
+    return TraceInfo(
+        trace_seed=run._seed(root, number), session_id=session_id, tags=[run.run_name],
+        trace_name=f"{run.scenario_id} · {root}",
+        attributes=TraceAttributes(
+            scenario_id=run.scenario_id, run_name=run.run_name,
+            sim_time=t.isoformat(timespec="minutes"), agent_version=AGENT_VERSION,
+            policy_version=policy_version, category=category, sku=sku,
+            incident_kind=incident_kind,
+        ),
+    )  # fmt: skip
 
 
 # attributes

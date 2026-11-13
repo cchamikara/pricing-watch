@@ -32,6 +32,7 @@ def decide(
     reviewer: str,
     note: str,
     t: datetime,
+    run: contract.RunTrace | None = None,
 ) -> Action | None:
     """Record the reviewer's call. An approval executes only if P1-P9 still pass at time t."""
     approval = s.get_one(Approval, proposal_id)
@@ -44,7 +45,9 @@ def decide(
         return None
     proposal = s.get_one(Proposal, proposal_id)
     # its own trace, because the incident trace may already be closed
-    with tracer.observation(*contract.approval_execute(proposal_id), {"reviewer": reviewer}):
+    trace = contract.root_trace(run, "approval", proposal_id, t, str(config.policy_version))
+    with tracer.observation(*contract.approval_execute(proposal_id), {"reviewer": reviewer},
+                            trace=trace):  # fmt: skip
         with tracer.observation(*contract.recheck(proposal_id), proposal.args) as obs:
             incident = s.get(Incident, proposal.incident_id) if proposal.incident_id else None
             ctx = incident_context(s, incident) if incident else IncidentContext()
@@ -59,11 +62,18 @@ def decide(
 
 
 def scripted_review(
-    s: Session, tracer: Tracer, config: PolicyConfig, t: datetime, *, approve: bool
+    s: Session,
+    tracer: Tracer,
+    config: PolicyConfig,
+    t: datetime,
+    *,
+    approve: bool,
+    run: contract.RunTrace | None = None,
 ) -> list[Action]:
     """Scenario reviewer: decide every pending approval in the same tick, the same way."""
     actions = [
-        decide(s, tracer, config, a.proposal_id, approve=approve, reviewer="script", note="", t=t)
+        decide(s, tracer, config, a.proposal_id, approve=approve, reviewer="script", note="", t=t,
+               run=run)
         for a in pending(s)
-    ]
+    ]  # fmt: skip
     return [a for a in actions if a is not None]
