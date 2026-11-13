@@ -13,3 +13,6 @@ wheels/
 .ruff_cache/
 .hypothesis/
 .idea/
+
+# local secrets for the Langfuse stack
+deploy/.env

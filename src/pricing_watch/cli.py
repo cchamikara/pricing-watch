@@ -3,6 +3,7 @@
 pricing-watch sim run --scenario scenarios/smoke-7d.yaml [--seed N] [--db run.db] [--model M]
 pricing-watch sim compare --scenario scenarios/supplier-cost-rise.yaml [--seed N] [--model M]
 pricing-watch approvals list|approve ID|reject ID --db run.db [--note TEXT]
+pricing-watch langfuse hello   (with uv run --env-file deploy/.env)
 """
 
 import argparse
@@ -44,9 +45,13 @@ def main(argv: list[str] | None = None) -> None:
         cmd.add_argument("proposal_id", type=int)
         cmd.add_argument("--db", type=Path, required=True)
         cmd.add_argument("--note", default="")
+    langfuse = groups.add_parser("langfuse").add_subparsers(dest="command", required=True)
+    langfuse.add_parser("hello", help="send a hello trace to each environment; check it arrived")
     args = parser.parse_args(argv)
 
-    if args.group == "sim" and args.command == "compare":
+    if args.group == "langfuse":
+        _langfuse_hello()
+    elif args.group == "sim" and args.command == "compare":
         _sim_compare(args)
     elif args.group == "sim":
         _sim_run(args)
@@ -108,6 +113,16 @@ def _sim_compare(args: argparse.Namespace) -> None:
         print(f"{label:22} {sm.gross_margin_ex_gst_cents / 100:>20,.2f} {delta:>+12,.2f} "
               f"{sm.stockout_sku_hours:>11} {sm.incidents:>10}  {sm.listings_matched_right}/"
               f"{sm.listings_matched_wrong}/{sm.listings_missed}")  # fmt: skip
+
+
+def _langfuse_hello() -> None:
+    from pricing_watch.tracing.hello import check  # imports the SDK only when asked
+
+    results = check()
+    for environment, ok in results.items():
+        print(f"{environment:10} {'arrived' if ok else 'NOT FOUND after 60 s'}")
+    if not all(results.values()):
+        raise SystemExit(1)
 
 
 def _open(db: Path) -> Session:

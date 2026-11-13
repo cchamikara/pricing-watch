@@ -1,4 +1,4 @@
-.PHONY: lint type test sim eval experiment
+.PHONY: lint type test sim eval experiment langfuse-env langfuse-up langfuse-down langfuse-hello
 
 lint:
 	uv run ruff check .
@@ -19,3 +19,18 @@ eval:
 
 experiment:
 	uv run python -m experiments $(ARGS)
+
+# Self-hosted Langfuse: see deploy/docker-compose.yml
+COMPOSE = docker compose -f deploy/docker-compose.yml --env-file deploy/.env
+
+langfuse-env:
+	sh deploy/make-env.sh
+
+langfuse-up:
+	$(COMPOSE) up -d --wait
+
+langfuse-down:
+	$(COMPOSE) down
+
+langfuse-hello:
+	uv run --env-file deploy/.env pricing-watch langfuse hello
