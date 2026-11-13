@@ -47,6 +47,9 @@ class Brief:
     notes: tuple[str, ...] = ()  # competitor listing notes, as text
     notices: tuple[str, ...] = ()  # supplier notices, as text
     cheapest_plausible: int | None = None  # lowest plausible competitor price now
+    listing_id: int | None = None  # a listing_match incident's listing
+    listing_title: str = ""
+    candidates: tuple[tuple[str, str], ...] = ()  # (sku, title) of our closest products
 
 
 class ModelError(Exception):

@@ -41,6 +41,11 @@ class RequestReview(_Args):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class MatchListing(_Args):
+    listing_id: Annotated[StrictInt, Field(gt=0)]
+    sku: Sku | None  # None: the listing is not a product we sell
+
+
 class NotifyMerchandiser(_Args):
     severity: Severity
     message: str = Field(min_length=1, max_length=2000)
@@ -51,6 +56,7 @@ ACTION_SCHEMAS: dict[str, type[_Args]] = {
     "propose_promotion": Promotion,
     "propose_reorder": Reorder,
     "request_review": RequestReview,
+    "match_listing": MatchListing,
     "notify_merchandiser": NotifyMerchandiser,
 }
 

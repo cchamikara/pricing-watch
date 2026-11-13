@@ -17,6 +17,8 @@ from pricing_watch.approvals.queue import scripted_review
 from pricing_watch.clock import TickClock
 from pricing_watch.models import (
     Action,
+    CompetitorListing,
+    CompetitorPrice,
     InboundOrder,
     Incident,
     Product,
@@ -31,13 +33,14 @@ from pricing_watch.policy.decide import propose
 from pricing_watch.policy.rules import DbStateView, IncidentContext
 from pricing_watch.rng import rng_for
 from pricing_watch.sim.catalogue import generate_catalogue
-from pricing_watch.sim.competitors import make_competitors, publish
+from pricing_watch.sim.competitors import listing_for, make_competitors, publish
 from pricing_watch.sim.demand import draw_sales, hourly_rate
 from pricing_watch.sim.faults import apply_feed_faults, observed_stock
 from pricing_watch.sim.keywords import cost_rise_pct, discontinued_skus, stock_up_qty
 from pricing_watch.sim.loop import run
+from pricing_watch.sim.matching import ensure_listing
 from pricing_watch.sim.promotions import active_discounts
-from pricing_watch.sim.repricer import cheapest_plausible, dropped_skus, execute, reprice
+from pricing_watch.sim.repricer import dropped_skus, execute, reprice
 from pricing_watch.sim.scenario import ScenarioConfig
 from pricing_watch.sim.stock import days_of_cover, forecast_daily_demand, receive_arrivals, reorder
 from pricing_watch.sim.suppliers import supplier_events
@@ -58,6 +61,9 @@ class Summary:
     stockout_sku_hours: int
     incidents: int
     rules_fallbacks: int  # incidents the rules plan answered because the model couldn't
+    listings_matched_right: int  # matched to the true product, or rightly to none of ours
+    listings_matched_wrong: int  # a wrong match feeds pricing a price for another product
+    listings_missed: int  # one of ours, left unmatched: its price is lost to pricing
     sell_through: dict[str, float]  # SKU -> units sold / units available
     fingerprint: str  # hash of every sales tick and executed action, for determinism checks
 
@@ -83,6 +89,8 @@ def run_scenario(
                 lead_time_hours=i.lead_time_hours,
                 supplier_description=i.supplier_description,
                 promo_lock_until=i.promo_lock_until,
+                title=i.title,
+                mpn=i.mpn,
             )
         )
     s.flush()
@@ -101,18 +109,45 @@ def run_scenario(
     stockout_hours = 0
     published = False
 
+    competitor_by_id = {c.id: c for c in competitors}
+    item_by_sku = {i.sku: i for i in items}
+    true_latest: dict[tuple[str, str], int | None] = {}  # (competitor, true SKU) -> price
+
     def competitor_feed(t: datetime) -> None:
         nonlocal published
         ours = {sku: p.price_inc_gst_cents for sku, p in products.items()}
         rows = [r for c in competitors for r in publish(c, items, ours, t)]
         published = bool(rows)
-        if published:
-            s.add_all(apply_feed_faults(rows, faults, t))
-            s.flush()
-            # shortcut: customers react to the same (possibly faulted) feed our system sees;
-            # split true and observed feeds if a scenario needs customers to ignore faults
-            for sku in cheapest:
-                cheapest[sku] = cheapest_plausible(s, sku)
+        if not published:
+            return
+        rows = apply_feed_faults(rows, faults, t)
+        title_matching = config.mode != "agent"
+        for nm in config.near_misses:  # not a product we sell, though its title says otherwise
+            if t >= config.start + timedelta(hours=nm.start_hour):
+                like = item_by_sku[nm.like_sku]
+                price = like.price_inc_gst_cents * nm.price_pct // 100
+                code = f"{nm.competitor.upper()}-NM-{like.sku}"
+                listing = ensure_listing(s, nm.competitor, code, nm.title, None, None,
+                                         title_matching=title_matching)  # fmt: skip
+                s.add(CompetitorPrice(
+                    competitor_id=nm.competitor, listing_id=listing.id, sku=listing.matched_sku,
+                    price_inc_gst_cents=price, published_at=t,
+                    plausible=like.plausible_low_cents <= price <= like.plausible_high_cents,
+                ))  # fmt: skip
+        for r in rows:  # publish names the true product; pricing only sees what we matched
+            true = r.sku or ""
+            code, title, mpn = listing_for(competitor_by_id[r.competitor_id], item_by_sku[true])
+            listing = ensure_listing(s, r.competitor_id, code, title, mpn, true,
+                                     title_matching=title_matching)  # fmt: skip
+            r.listing_id, r.sku = listing.id, listing.matched_sku
+            true_latest[r.competitor_id, true] = r.price_inc_gst_cents if r.plausible else None
+        s.add_all(rows)
+        s.flush()
+        # customers compare the real products; a wrong match fools our pricing, not them
+        # shortcut: they still see the (possibly faulted) feed; split it if a scenario needs to
+        for sku in cheapest:
+            seen = [p for (_, true), p in true_latest.items() if true == sku and p is not None]
+            cheapest[sku] = min(seen, default=None)
 
     def demand(t: datetime) -> None:
         nonlocal stockout_hours
@@ -279,11 +314,17 @@ def _summarise(
     for tick in ticks:
         sold[tick.sku] = sold.get(tick.sku, 0) + tick.units_sold
     sources = list(s.scalars(select(Incident.answer_source)))
+    listings = list(s.scalars(select(CompetitorListing)))
     return Summary(
         gross_margin_ex_gst_cents=sum(t.revenue_ex_gst_cents - t.cogs_cents for t in ticks),
         stockout_sku_hours=stockout_hours,
         incidents=len(sources),
         rules_fallbacks=sources.count("rules_fallback"),
+        listings_matched_right=sum(li.matched_sku == li.true_sku for li in listings),
+        listings_matched_wrong=sum(
+            li.matched_sku is not None and li.matched_sku != li.true_sku for li in listings
+        ),
+        listings_missed=sum(li.matched_sku is None and li.true_sku is not None for li in listings),
         sell_through={
             # a SKU that sold out in the warm-up with nothing arriving had 0 units to sell
             sku: sold.get(sku, 0) / max(opening[sku] + received[sku], 1)

@@ -19,6 +19,16 @@ class FaultConfig(BaseModel):
     sku: str | None = None
 
 
+class NearMissConfig(BaseModel):
+    """A competitor listing that looks like one of ours but isn't: another size, a bundle."""
+
+    competitor: str
+    like_sku: str  # the product of ours it resembles
+    title: str
+    price_pct: int = Field(gt=0)  # its price, as a share of like_sku's catalogue price
+    start_hour: int = Field(ge=0)
+
+
 class ScenarioConfig(BaseModel):
     id: str
     seed: int
@@ -30,6 +40,7 @@ class ScenarioConfig(BaseModel):
     model: Literal["stand-in", "claude", "gemini"] = "stand-in"
     model_script: list[ScriptStep] = []  # the stand-in's script; real models ignore it
     supplier_notices: list[NoticeConfig] = []  # text, plus the change it announces (hidden)
+    near_misses: list[NearMissConfig] = []
     text_rules: bool = False  # the rules read text by keyword; default: they ignore it
 
     def fault_schedule(self) -> list[Fault]:

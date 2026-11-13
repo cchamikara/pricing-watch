@@ -91,6 +91,24 @@ def publish(
     return rows
 
 
+TITLE_FORMS = (  # how a competitor might list our 'Nordwave 75" QLED TV'
+    lambda t: t,
+    lambda t: t.lower().replace('"', "in"),
+    lambda t: "NEW " + t.replace('"', " inch") + " - 4K Smart",
+    lambda t: t.replace('"', "-inch") + " (2026 model)",
+    lambda t: t.replace("TV", "Television"),
+)
+
+
+def listing_for(competitor: Competitor, item: CatalogueItem) -> tuple[str, str, str | None]:
+    """(code, title, part number or None): stable per competitor and SKU, seeded. Four in five
+    listings show the part number; the rest leave only the title to match on."""
+    h = int(hashlib.sha256(f"{competitor.note_salt}|{competitor.id}|{item.sku}|listing".encode())
+            .hexdigest()[:8], 16)  # fmt: skip
+    title = TITLE_FORMS[h % len(TITLE_FORMS)](item.title)
+    return f"{competitor.id.upper()}-{h % 10**6:06d}", title, item.mpn if h % 5 else None
+
+
 def _note(competitor: Competitor, sku: str, t: datetime, weekend: bool) -> str:
     """Same wording for a listing all weekend (or all the time, outside a sale)."""
     if competitor.strategy == "weekend_sale" and not weekend:

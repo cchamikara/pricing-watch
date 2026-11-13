@@ -77,6 +77,8 @@ class CatalogueItem:
     plausible_high_cents: int
     supplier_description: str  # the prompt-injection fault appends to this text
     promo_lock_until: datetime | None
+    title: str = ""  # how we list it, e.g. 'Nordwave 75" QLED TV'
+    mpn: str = ""  # the manufacturer part number, unique per SKU
 
 
 def generate_catalogue(seed: int, start: datetime) -> list[CatalogueItem]:
@@ -108,6 +110,8 @@ def generate_catalogue(seed: int, start: datetime) -> list[CatalogueItem]:
                     promo_lock_until=start + timedelta(days=int(rng.integers(2, 8)))
                     if locked
                     else None,
+                    title=f"{brand} {noun}",  # derived, so no new random draws: runs unchanged
+                    mpn=f"{brand[:3].upper()}-{p.prefix}{n:03d}",
                 )
             )
     return items

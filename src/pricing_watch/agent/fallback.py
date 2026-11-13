@@ -30,6 +30,11 @@ def rules_plan(
     def review(why: str) -> ProposalOut:
         return ProposalOut(tool="request_review", args={"sku": b.sku, "reason": why}, reason=why)
 
+    if b.kind == "listing_match" and b.candidates:  # rules can't judge a title: a person must
+        why = f"Is competitor listing {b.listing_id} our {b.candidates[0][0]}?"
+        return plan("action_needed", why, ProposalOut(
+            tool="request_review", reason="unsure of the match",
+            args={"sku": b.candidates[0][0], "reason": why}))  # fmt: skip
     if b.sku is None or b.product is None or b.stock is None:  # category-wide: margin_erosion
         return plan("action_needed", f"{b.kind} on {scope}: please review prices and costs.")
     if b.kind == "supplier_notice":  # rules can't read text, so a person must

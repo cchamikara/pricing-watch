@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from pricing_watch.models import (
     Action,
+    CompetitorListing,
     CompetitorPrice,
     MarkdownLedger,
     Notification,
@@ -26,6 +27,7 @@ from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.decide import propose
 from pricing_watch.policy.rules import DbStateView, IncidentContext, markdown_cost_cents
 from pricing_watch.policy.schemas import (
+    MatchListing,
     NotifyMerchandiser,
     PriceChange,
     Promotion,
@@ -130,6 +132,15 @@ def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Acti
         elif isinstance(args, RequestReview):  # the Action row is the review request
             result = {"price_inc_gst_cents": s.get_one(Product, args.sku).price_inc_gst_cents,
                       "on_hand": view.stock(args.sku)[0]}  # fmt: skip
+        elif isinstance(args, MatchListing):  # the model judged which product a listing is
+            listing = s.get_one(CompetitorListing, args.listing_id)
+            result = {"title": listing.title, "matched_sku": args.sku, "was": listing.matched_sku}
+            listing.matched_sku, listing.matched_by = args.sku, "model"
+            listing.match_confidence = 1.0 if args.sku else 0.0
+            for row in s.scalars(
+                select(CompetitorPrice).where(CompetitorPrice.listing_id == listing.id)
+            ):
+                row.sku = args.sku  # its prices now count for that product, or for none
         else:
             assert isinstance(args, NotifyMerchandiser)
             if proposal.incident_id is None:
@@ -178,13 +189,14 @@ def dropped_skus(s: Session, t: datetime) -> set[str]:
         s.execute(
             select(CompetitorPrice.competitor_id + "|" + CompetitorPrice.sku,
                    func.max(CompetitorPrice.price_inc_gst_cents))
-            .where(CompetitorPrice.plausible, CompetitorPrice.published_at > t - DROP_WINDOW,
+            .where(CompetitorPrice.plausible, CompetitorPrice.sku.is_not(None),  # matched only
+                   CompetitorPrice.published_at > t - DROP_WINDOW,
                    CompetitorPrice.published_at <= t)
             .group_by(CompetitorPrice.competitor_id, CompetitorPrice.sku)
         ).all()
     )  # fmt: skip
     return {
-        r.sku
+        sku
         for sku in {k.split("|", 1)[1] for k in high}
         for r in latest_prices(s, sku)
         if r.plausible

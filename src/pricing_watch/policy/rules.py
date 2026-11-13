@@ -18,6 +18,7 @@ from pricing_watch.money import Cents, discounted, ex_from_inc, floor_price
 from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.schemas import (
     ACTION_SCHEMAS,
+    MatchListing,
     PriceChange,
     Promotion,
     Reorder,
@@ -57,6 +58,7 @@ class IncidentContext:
 
     scope: frozenset[str] | None = None  # SKUs the incident may touch; None = any (rules path)
     suspect: frozenset[str] = frozenset()  # SKUs with suspect data in this incident
+    listing_id: int | None = None  # the competitor listing a listing_match incident is about
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,8 @@ Rule = Callable[[Args, StateView, IncidentContext, PolicyConfig], RuleResult]
 def _skus(args: Args) -> list[str]:
     if isinstance(args, Promotion):
         return list(args.skus)
+    if isinstance(args, MatchListing):
+        return [args.sku] if args.sku else []
     return [args.sku] if isinstance(args, (PriceChange, Reorder, RequestReview)) else []
 
 
@@ -104,6 +108,8 @@ def _facts(view: StateView, sku: str) -> ProductFacts:
 
 
 def p3_sku_exists(args: Args, view: StateView, ctx: IncidentContext, _: PolicyConfig) -> RuleResult:
+    if isinstance(args, MatchListing) and args.listing_id != ctx.listing_id:
+        return RuleResult(False, f"listing {args.listing_id} is outside this incident")
     for sku in _skus(args):
         if view.product(sku) is None:
             return RuleResult(False, f"unknown SKU {sku}")

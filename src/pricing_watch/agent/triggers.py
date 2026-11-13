@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from pricing_watch.models import (
     Action,
+    CompetitorListing,
     InboundOrder,
     Incident,
     Product,
@@ -24,6 +25,7 @@ from pricing_watch.models import (
 from pricing_watch.money import floor_price
 from pricing_watch.policy.rules import IncidentContext
 from pricing_watch.sim.catalogue import PLAUSIBLE_BAND
+from pricing_watch.sim.matching import candidates
 from pricing_watch.sim.repricer import BAND_PCT, dropped_skus, latest_prices
 from pricing_watch.sim.stock import forecast_daily_demand
 
@@ -95,8 +97,30 @@ def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Inciden
         opened.append(Incident(kind=kind, category=category, sku=sku, opened_at=t,
                                suspect_skus=sorted(suspect & in_scope), closed_at=None,
                                trace_id="", session_id="", answer_source=""))  # fmt: skip
+    opened += _listing_incidents(s, t)
     s.add_all(opened)
     s.flush()
+    return opened
+
+
+def _listing_incidents(s: Session, t: datetime) -> list[Incident]:
+    """One listing_match incident per listing still waiting to be matched, the first time it is
+    seen. Scope is the best candidate's category, so the agent may pick any SKU in it."""
+    judged = select(Incident.listing_id).where(Incident.listing_id.is_not(None))
+    waiting = s.scalars(
+        select(CompetitorListing)
+        .where(CompetitorListing.matched_by == "", CompetitorListing.id.not_in(judged))
+        .order_by(CompetitorListing.id)
+    )
+    opened = []
+    for listing in waiting:
+        best = candidates(s, listing.title, n=1)
+        if best:  # nothing like it: a product we don't sell, nothing to judge
+            opened.append(Incident(
+                kind="listing_match", category=best[0][1].category, sku=None, suspect_skus=[],
+                opened_at=t, closed_at=None, trace_id="", session_id="", answer_source="",
+                listing_id=listing.id,
+            ))  # fmt: skip
     return opened
 
 
@@ -175,4 +199,5 @@ def incident_context(s: Session, incident: Incident) -> IncidentContext:
         scope = frozenset(
             s.scalars(select(Product.sku).where(Product.category == incident.category))
         )
-    return IncidentContext(scope=scope, suspect=frozenset(incident.suspect_skus))
+    return IncidentContext(scope=scope, suspect=frozenset(incident.suspect_skus),
+                           listing_id=incident.listing_id)  # fmt: skip

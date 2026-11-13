@@ -35,10 +35,10 @@ def _active(faults: Sequence[Fault], kind: FaultKind, t: datetime, sku: str) -> 
 def apply_feed_faults(
     rows: list[CompetitorPrice], faults: Sequence[Fault], t: datetime
 ) -> list[CompetitorPrice]:
-    """Competitor rows as published under any active feed faults."""
-    rows = [r for r in rows if not _active(faults, "stale_feed", t, r.sku)]
+    """Competitor rows as published (each names its true SKU) under any active feed faults."""
+    rows = [r for r in rows if not _active(faults, "stale_feed", t, r.sku or "")]
     for r in rows:
-        if _active(faults, "implausible_feed", t, r.sku):
+        if _active(faults, "implausible_feed", t, r.sku or ""):
             r.price_inc_gst_cents = round(r.price_inc_gst_cents * IMPLAUSIBLE_FACTOR)
             r.plausible = False
     return rows

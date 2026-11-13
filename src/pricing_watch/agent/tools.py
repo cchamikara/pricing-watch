@@ -10,11 +10,12 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pricing_watch.models import Product, SupplierNotice
+from pricing_watch.models import CompetitorListing, CompetitorPrice, Product, SupplierNotice
 from pricing_watch.money import floor_price
 from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.rules import DbStateView
 from pricing_watch.sim.faults import Fault, observed_description, observed_stock
+from pricing_watch.sim.matching import candidates
 from pricing_watch.sim.repricer import latest_prices
 from pricing_watch.sim.stock import FORECAST_WINDOW, days_of_cover
 from pricing_watch.tracing import Tracer
@@ -73,6 +74,24 @@ class SupplierNoticesRead(BaseModel):
     category: str
     sku: str | None
     notices: list[NoticeQuote]  # oldest first
+
+
+class Candidate(BaseModel):
+    sku: str
+    title: str
+    mpn: str
+    price_inc_gst_cents: int
+    similarity: float  # how alike the titles are, 0 to 1
+
+
+class ListingRead(BaseModel):
+    listing_id: int
+    competitor_id: str
+    listing_code: str
+    title: str  # untrusted; the prompt wraps it as data
+    mpn: str | None
+    price_inc_gst_cents: int | None  # its latest price
+    candidates: list[Candidate]  # our closest products, best first
 
 
 class PolicyRead(BaseModel):
@@ -167,6 +186,23 @@ class ReadTools:
             return SupplierNoticesRead(category=category, sku=sku, notices=notices)
 
         return self._traced("get_supplier_notices", sku, read)
+
+    def get_listing(self, listing_id: int) -> ListingRead:
+        def read() -> ListingRead:
+            li = self._s.get_one(CompetitorListing, listing_id)
+            price = self._s.scalars(
+                select(CompetitorPrice.price_inc_gst_cents)
+                .where(CompetitorPrice.listing_id == listing_id)
+                .order_by(CompetitorPrice.published_at.desc()).limit(1)
+            ).first()  # fmt: skip
+            near = [Candidate(sku=p.sku, title=p.title, mpn=p.mpn, similarity=round(score, 2),
+                              price_inc_gst_cents=p.price_inc_gst_cents)
+                    for score, p in candidates(self._s, li.title)]  # fmt: skip
+            return ListingRead(listing_id=li.id, competitor_id=li.competitor_id, title=li.title,
+                               listing_code=li.listing_code, mpn=li.mpn,
+                               price_inc_gst_cents=price, candidates=near)  # fmt: skip
+
+        return self._traced("get_listing", None, read)
 
     def get_policy(self) -> PolicyRead:
         def read() -> PolicyRead:

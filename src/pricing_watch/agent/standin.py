@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from pricing_watch.agent.model import Brief, Message, ModelResponse, ModelTimeout
 from pricing_watch.sim.keywords import stock_up_qty
+from pricing_watch.sim.matching import normalise
 from pricing_watch.sim.repricer import target_price
 
 Behaviour = Literal[
@@ -73,6 +74,11 @@ def _default(b: Brief) -> dict[str, Any]:
             follow = {"sku": b.sku, "new_price_inc_gst_cents": new}
             proposals.append(_proposal("propose_price_change", "follow the competitor", follow))
         severity, text = "info", f"{b.sku}: a competitor cut its price; following it."
+    elif b.kind == "listing_match" and b.candidates:  # can't judge the title: ask a person
+        why = f"Is competitor listing {b.listing_id} our {b.candidates[0][0]}?"
+        proposals.append(_proposal("request_review", "unsure of the match",
+                                   {"sku": b.candidates[0][0], "reason": why}))  # fmt: skip
+        severity, text = "action_needed", why
     elif b.kind in ("competitor_undercut", "margin_erosion"):
         severity, text = (
             "warn",
@@ -118,6 +124,19 @@ def _heed(b: Brief) -> dict[str, Any]:
             out["message"] = {"severity": "warn",
                               "text": f"{b.sku}: supplier cost rises {pct.group(1)}%; "
                                       f"stocking up at today's cost."}  # fmt: skip
+    elif b.kind == "listing_match" and b.listing_id:
+        words = set(normalise(b.listing_title).split())
+        fits = [sku for sku, title in b.candidates if set(normalise(title).split()) <= words]
+        if len(fits) == 1 or not fits:  # every word of one title, or of none: decide
+            sku = fits[0] if fits else None
+            out["proposals"] = [_proposal("match_listing", "every word of our title matches"
+                                          if sku else "not one of ours (size or model differs)",
+                                          {"listing_id": b.listing_id, "sku": sku})]  # fmt: skip
+            out["message"] = {
+                "severity": "info",
+                "text": f"Listing {b.listing_id} is {sku or 'none of ours'}.",
+            }
+        # two fit (twins): keep the default, a review
     elif b.kind in ("competitor_undercut", "competitor_price_drop") and any(
         _SALE.search(n.lower()) for n in b.notes
     ):

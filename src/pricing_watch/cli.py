@@ -99,12 +99,15 @@ def _sim_compare(args: argparse.Namespace) -> None:
     print(f"scenario {config.id}  seed {config.seed}  {config.days} days")
     runs = compare(config)
     base = runs["rules, ignoring text"].gross_margin_ex_gst_cents
-    header = ("run", "gross margin ex GST", "vs rules", "stockout h", "incidents")
-    print(f"{header[0]:22} {header[1]:>20} {header[2]:>12} {header[3]:>11} {header[4]:>10}")
+    header = ("run", "gross margin ex GST", "vs rules", "stockout h", "incidents",
+              "matches right/wrong/missed")  # fmt: skip
+    print(f"{header[0]:22} {header[1]:>20} {header[2]:>12} {header[3]:>11} {header[4]:>10}  "
+          f"{header[5]}")  # fmt: skip
     for label, sm in runs.items():
         delta = (sm.gross_margin_ex_gst_cents - base) / 100
         print(f"{label:22} {sm.gross_margin_ex_gst_cents / 100:>20,.2f} {delta:>+12,.2f} "
-              f"{sm.stockout_sku_hours:>11} {sm.incidents:>10}")  # fmt: skip
+              f"{sm.stockout_sku_hours:>11} {sm.incidents:>10}  {sm.listings_matched_right}/"
+              f"{sm.listings_matched_wrong}/{sm.listings_missed}")  # fmt: skip
 
 
 def _open(db: Path) -> Session:

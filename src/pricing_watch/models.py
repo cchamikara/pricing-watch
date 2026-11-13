@@ -24,6 +24,8 @@ class Product(Base):
     lead_time_hours: Mapped[int]
     supplier_description: Mapped[str]
     promo_lock_until: Mapped[datetime | None]
+    title: Mapped[str] = mapped_column(default="")
+    mpn: Mapped[str] = mapped_column(default="")  # manufacturer part number
     # hidden truth: when the supplier stopped taking orders. Simulator-only; no read tool shows it
     discontinued_from: Mapped[datetime | None] = mapped_column(default=None)
 
@@ -46,11 +48,29 @@ class InboundOrder(Base):
     unit_cost_ex_gst_cents: Mapped[int | None] = mapped_column(default=None)
 
 
+class CompetitorListing(Base):
+    """A competitor's own listing, and which of our products we think it is."""
+
+    __tablename__ = "competitor_listing"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    competitor_id: Mapped[str]
+    listing_code: Mapped[str]  # the competitor's code, not ours
+    title: Mapped[str]  # untrusted text
+    mpn: Mapped[str | None]  # the part number, when the listing shows one
+    matched_sku: Mapped[str | None] = mapped_column(ForeignKey("product.sku"))  # None: no match
+    match_confidence: Mapped[float]
+    matched_by: Mapped[str]  # "rules", "model" or "person"; "" while unmatched
+    # hidden truth: the product it really is (None: not one we sell). Simulator-only
+    true_sku: Mapped[str | None] = mapped_column(ForeignKey("product.sku"))
+
+
 class CompetitorPrice(Base):
     __tablename__ = "competitor_price"
     id: Mapped[int] = mapped_column(primary_key=True)
     competitor_id: Mapped[str]
-    sku: Mapped[str] = mapped_column(ForeignKey("product.sku"), index=True)
+    listing_id: Mapped[int | None] = mapped_column(ForeignKey("competitor_listing.id"))
+    # the matched SKU, so only matched listings reach pricing; None while unmatched
+    sku: Mapped[str | None] = mapped_column(ForeignKey("product.sku"), index=True)
     price_inc_gst_cents: Mapped[int]
     published_at: Mapped[datetime]
     plausible: Mapped[bool]
@@ -80,6 +100,9 @@ class Incident(Base):
     trace_id: Mapped[str]
     session_id: Mapped[str]
     answer_source: Mapped[str]  # "model" or "rules_fallback"
+    listing_id: Mapped[int | None] = mapped_column(
+        ForeignKey("competitor_listing.id"), default=None
+    )
 
 
 class Proposal(Base):
