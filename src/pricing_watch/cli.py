@@ -8,8 +8,10 @@ pricing-watch langfuse hello   (with uv run --env-file deploy/.env)
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import NoResultFound
@@ -22,6 +24,9 @@ from pricing_watch.sim.run import AGENT_HOUR, WARMUP_DAYS, compare, run_scenario
 from pricing_watch.sim.scenario import load_scenario
 from pricing_watch.tracing import NoopTracer
 
+if TYPE_CHECKING:
+    from pricing_watch.tracing.langfuse_tracer import LangfuseTracer
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="pricing-watch")
@@ -33,6 +38,8 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--db", type=Path, help="save the run to this new SQLite file")
     run.add_argument("--model", choices=["stand-in", "claude", "gemini"],
                      help="override the scenario's model (agent mode only)")  # fmt: skip
+    run.add_argument("--trace", action="store_true",
+                     help="send the run to Langfuse; needs --env-file deploy/.env")  # fmt: skip
     cmp = sim.add_parser("compare", help="run a scenario against every baseline, same seed")
     cmp.add_argument("--scenario", type=Path, required=True, help="path to a scenario YAML")
     cmp.add_argument("--seed", type=int, help="override the scenario's seed")
@@ -79,7 +86,12 @@ def _sim_run(args: argparse.Namespace) -> None:
         )
         print("sim time          kind                scope    answered by    model  severity"
               "      actions  ✓ ran ⏸ approval ✗ refused   notice")  # fmt: skip
-    summary = run_scenario(config, db_url=db_url)
+    tracer = _langfuse_tracer() if args.trace else None
+    try:
+        summary = run_scenario(config, tracer=tracer, db_url=db_url)
+    finally:  # even when the run crashes: those spans explain why
+        if tracer:
+            tracer.flush()
     agent = f" ({config.model})" if config.mode == "agent" else ""
     print(
         f"scenario {config.id}  seed {config.seed}  {config.days} days  mode {config.mode}{agent}"
@@ -113,6 +125,15 @@ def _sim_compare(args: argparse.Namespace) -> None:
         print(f"{label:22} {sm.gross_margin_ex_gst_cents / 100:>20,.2f} {delta:>+12,.2f} "
               f"{sm.stockout_sku_hours:>11} {sm.incidents:>10}  {sm.listings_matched_right}/"
               f"{sm.listings_matched_wrong}/{sm.listings_missed}")  # fmt: skip
+
+
+def _langfuse_tracer() -> "LangfuseTracer":
+    from langfuse import Langfuse  # the SDK only when tracing
+
+    from pricing_watch.tracing.langfuse_tracer import LangfuseTracer
+
+    environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT", "sim")
+    return LangfuseTracer(Langfuse(environment=environment))
 
 
 def _langfuse_hello() -> None:
