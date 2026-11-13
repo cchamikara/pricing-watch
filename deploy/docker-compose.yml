@@ -60,6 +60,11 @@ services:
       - otel_queue:/var/lib/otelcol  # the on-disk sending queue: survives restarts
     ports:
       - 127.0.0.1:4318:4318
+    # `backend` is its only way to Langfuse, so the outage drill cuts just that; the published
+    # port lives on `edge`, the gateway network (gw_priority), so the app still reaches it
+    networks:
+      edge: {gw_priority: 1}
+      backend: {}
 
   langfuse-worker:
     image: docker.langfuse.com/langfuse/langfuse-worker:${LANGFUSE_IMAGE_TAG:-4.79.0}
@@ -73,6 +78,7 @@ services:
     depends_on: *depends-on
     ports:
       - 127.0.0.1:3000:3000
+    networks: [default, backend]  # backend: the Collector's way in
     healthcheck:  # ready only after its first-start migrations, so `up --wait` means usable
       # the server listens on the container's hostname, not 127.0.0.1; $$ keeps it for the shell
       test: ["CMD-SHELL", "wget -qO /dev/null http://$$HOSTNAME:3000/api/public/health"]
@@ -158,6 +164,10 @@ services:
       PGTZ: UTC
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+networks:
+  edge:
+  backend:
 
 volumes:
   otel_queue:

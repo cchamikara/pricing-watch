@@ -57,12 +57,14 @@ class _Handle:
 class LangfuseTracer:
     def __init__(self, client: Langfuse | None = None) -> None:
         self._lf = client or Langfuse()
+        self.sent = 0  # observations handed to the exporter: what Langfuse should end up with
 
     @contextmanager
     def observation(
         self, name: str, type: ObservationType, input: object = None,
         trace: TraceInfo | None = None,
     ) -> Iterator[Observation]:  # fmt: skip
+        self.sent += 1
         with ExitStack() as stack:
             context: TraceContext | None = None
             if trace:  # a root: its seeded trace id, session and trace attributes, from the start

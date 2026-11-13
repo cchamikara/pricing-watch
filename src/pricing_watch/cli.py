@@ -10,6 +10,7 @@ import argparse
 import logging
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -64,11 +65,27 @@ def main(argv: list[str] | None = None) -> None:
     langfuse = groups.add_parser("langfuse").add_subparsers(dest="command", required=True)
     langfuse.add_parser("hello", help="send a hello trace to each environment; check it arrived")
     langfuse.add_parser("heartbeat", help="send one heartbeat (schedule it with cron)")
+    guard = langfuse.add_parser("verify-guardrails",
+                                help="trace a scenario; Langfuse's refused guardrails must equal "
+                                     "SQLite's refused decisions")  # fmt: skip
+    guard.add_argument("--scenario", type=Path, default=Path("scenarios/unsafe-model.yaml"))
+    guard.add_argument("--run-name", help="default: verify-<time>")
+    spans = langfuse.add_parser(
+        "verify-spans", help="wait until Langfuse holds exactly the spans a run sent"
+    )
+    spans.add_argument("--scenario", type=Path, required=True)
+    spans.add_argument("--run-name", required=True)
+    spans.add_argument("--expected", type=int, required=True)
+    spans.add_argument("--timeout", type=float, default=900, help="seconds to wait")
     push = langfuse.add_parser("push-prompts", help="make the local templates the labelled prompt")
     push.add_argument("--label", choices=["production", "ci"], required=True)
     args = parser.parse_args(argv)
 
-    if args.group == "langfuse" and args.command == "heartbeat":
+    if args.group == "langfuse" and args.command == "verify-guardrails":
+        _verify_guardrails(args.scenario, args.run_name)
+    elif args.group == "langfuse" and args.command == "verify-spans":
+        _verify_spans(args.scenario, args.run_name, args.expected, args.timeout)
+    elif args.group == "langfuse" and args.command == "heartbeat":
         _heartbeat()
     elif args.group == "langfuse" and args.command == "push-prompts":
         _push_prompts(args.label)
@@ -118,6 +135,7 @@ def _sim_run(args: argparse.Namespace) -> None:
     finally:  # even when the run crashes: those spans explain why
         if tracer:
             tracer.flush()
+            print(f"spans sent to the Collector: {tracer.sent}")
     agent = f" ({config.model})" if config.mode == "agent" else ""
     print(
         f"scenario {config.id}  seed {config.seed}  {config.days} days  mode {config.mode}{agent}"
@@ -165,6 +183,52 @@ def _langfuse_tracer(
     client = langfuse_client(environment=environment, mask_otel_spans=mask)
     label = label or ("ci" if environment == "ci" else "production")
     return LangfuseTracer(client), fetch_prompts(client, label)
+
+
+def _verify_guardrails(scenario: Path, run_name: str | None) -> None:
+    """Exit check: every refused proposal shows as a refused guardrail in Langfuse."""
+    import tempfile
+
+    from langfuse import Langfuse
+
+    from pricing_watch.tracing.verify import refused_guardrails, run_observations, wait_for
+
+    started = datetime.now(UTC)  # noqa: TID251  # wall time, only to bound the Langfuse query
+    run_name = run_name or f"verify-{started:%Y%m%d-%H%M%S}"
+    environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT", "ci")
+    config = load_scenario(scenario)
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "run.db"
+        main(["sim", "run", "--scenario", str(scenario), "--trace", "--run-name", run_name,
+              "--db", str(db)])  # fmt: skip
+        s = _open(db)
+        expected = s.scalar(select(func.count()).select_from(PolicyDecision)
+                            .where(PolicyDecision.decision == "refused")) or 0  # fmt: skip
+    client, since = Langfuse(), started - timedelta(minutes=1)
+
+    def refused_in_langfuse() -> int:
+        return refused_guardrails(run_observations(client, environment, config.id, run_name, since))
+
+    seen = wait_for(refused_in_langfuse, expected, 300)
+    print(f"refused decisions in SQLite {expected}, refused guardrails in Langfuse {seen}")
+    if seen != expected:
+        raise SystemExit(1)
+
+
+def _verify_spans(scenario: Path, run_name: str, expected: int, timeout_s: float) -> None:
+    """Exit check: after an outage, Langfuse holds exactly the spans the run sent."""
+    from langfuse import Langfuse
+
+    from pricing_watch.tracing.verify import run_observations, wait_for
+
+    environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT", "ci")
+    since = datetime.now(UTC) - timedelta(hours=2)  # noqa: TID251  # bounds the query only
+    client, scenario_id = Langfuse(), load_scenario(scenario).id
+    seen = wait_for(lambda: len(run_observations(client, environment, scenario_id, run_name,
+                                                 since)), expected, timeout_s)  # fmt: skip
+    print(f"spans sent {expected}, spans in Langfuse {seen}")
+    if seen != expected:
+        raise SystemExit(1)
 
 
 def _heartbeat() -> None:
