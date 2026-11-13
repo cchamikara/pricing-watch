@@ -25,16 +25,18 @@ from pricing_watch.agent.tools import (
     StockRead,
     SupplierNoticesRead,
 )
+from pricing_watch.tracing import contract
 
 TEMPLATES = Path(__file__).with_name("templates")
 SYSTEM_TEMPLATE = (TEMPLATES / "system_prompt.md").read_text()
 INCIDENT_TEMPLATE = (TEMPLATES / "incident_prompt.md").read_text()
 MODEL_TOOLS = ("propose_price_change", "propose_promotion", "propose_reorder", "request_review",
                "match_listing")  # fmt: skip
-READ_NAMES: dict[type[BaseModel], str] = {
-    ProductRead: "get_product", StockRead: "get_stock", CompetitorRead: "get_competitor_prices",
-    ForecastRead: "get_demand_forecast", PolicyRead: "get_policy",
-    SupplierNoticesRead: "get_supplier_notices", ListingRead: "get_listing",
+READ_NAMES: dict[type[BaseModel], str] = {  # summary keys: the reads' observation names
+    ProductRead: contract.GET_PRODUCT.name, StockRead: contract.GET_STOCK.name,
+    CompetitorRead: contract.GET_COMPETITOR_PRICES.name,
+    ForecastRead: contract.GET_DEMAND_FORECAST.name, PolicyRead: contract.GET_POLICY.name,
+    SupplierNoticesRead: contract.GET_SUPPLIER_NOTICES.name, ListingRead: contract.GET_LISTING.name,
 }  # fmt: skip
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 

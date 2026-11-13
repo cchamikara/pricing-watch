@@ -18,7 +18,7 @@ from pricing_watch.sim.faults import Fault, observed_description, observed_stock
 from pricing_watch.sim.matching import candidates
 from pricing_watch.sim.repricer import latest_prices
 from pricing_watch.sim.stock import FORECAST_WINDOW, days_of_cover
-from pricing_watch.tracing import Tracer
+from pricing_watch.tracing import Tracer, contract
 
 NOTICE_WINDOW = timedelta(days=14)  # supplier notices older than this are left out
 
@@ -111,9 +111,11 @@ class ReadTools:
         self._view = DbStateView(s, t)
         self.read_skus: set[str] = set()
 
-    def _traced[M: BaseModel](self, name: str, sku: str | None, read: Callable[[], M]) -> M:
+    def _traced[M: BaseModel](
+        self, span: contract.Obs, sku: str | None, read: Callable[[], M]
+    ) -> M:
         """Run the read inside its span, so the span times it and records a failure."""
-        with self._tracer.observation(name, "tool", {"sku": sku} if sku else {}) as obs:
+        with self._tracer.observation(*span, {"sku": sku} if sku else {}) as obs:
             out = read()
             obs.set_output(out.model_dump(mode="json"))
         if sku:
@@ -132,7 +134,7 @@ class ReadTools:
                                                           self._faults, self._t),
             )  # fmt: skip
 
-        return self._traced("get_product", sku, read)
+        return self._traced(contract.GET_PRODUCT, sku, read)
 
     def get_stock(self, sku: str) -> StockRead:
         def read() -> StockRead:
@@ -142,7 +144,7 @@ class ReadTools:
             cover = days_of_cover(on_hand, forecast) if forecast > 0 else None
             return StockRead(sku=sku, on_hand=on_hand, inbound_qty=inbound, days_of_cover=cover)
 
-        return self._traced("get_stock", sku, read)
+        return self._traced(contract.GET_STOCK, sku, read)
 
     def get_competitor_prices(self, sku: str) -> CompetitorRead:
         def read() -> CompetitorRead:
@@ -155,10 +157,10 @@ class ReadTools:
             ]  # fmt: skip
             return CompetitorRead(sku=sku, prices=quotes)
 
-        return self._traced("get_competitor_prices", sku, read)
+        return self._traced(contract.GET_COMPETITOR_PRICES, sku, read)
 
     def get_demand_forecast(self, sku: str) -> ForecastRead:
-        return self._traced("get_demand_forecast", sku, lambda: ForecastRead(
+        return self._traced(contract.GET_DEMAND_FORECAST, sku, lambda: ForecastRead(
             sku=sku, daily_units=self._view.forecast_daily(sku), window_days=FORECAST_WINDOW.days
         ))  # fmt: skip
 
@@ -185,7 +187,7 @@ class ReadTools:
             ]  # fmt: skip
             return SupplierNoticesRead(category=category, sku=sku, notices=notices)
 
-        return self._traced("get_supplier_notices", sku, read)
+        return self._traced(contract.GET_SUPPLIER_NOTICES, sku, read)
 
     def get_listing(self, listing_id: int) -> ListingRead:
         def read() -> ListingRead:
@@ -202,7 +204,7 @@ class ReadTools:
                                listing_code=li.listing_code, mpn=li.mpn,
                                price_inc_gst_cents=price, candidates=near)  # fmt: skip
 
-        return self._traced("get_listing", None, read)
+        return self._traced(contract.GET_LISTING, None, read)
 
     def get_policy(self) -> PolicyRead:
         def read() -> PolicyRead:
@@ -217,4 +219,4 @@ class ReadTools:
                 budget_remaining_cents=remaining,
             )
 
-        return self._traced("get_policy", None, read)
+        return self._traced(contract.GET_POLICY, None, read)

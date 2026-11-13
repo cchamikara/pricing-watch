@@ -8,7 +8,7 @@ refuse on the first failure, and P10 runs only when everything else passed.
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -27,8 +27,8 @@ from pricing_watch.policy.schemas import (
 )
 from pricing_watch.sim.promotions import active_discounts
 from pricing_watch.sim.stock import forecast_daily_demand
-
-DecisionKind = Literal["allowed", "needs_approval", "refused"]
+from pricing_watch.tracing import contract
+from pricing_watch.tracing.contract import DecisionKind
 
 
 @dataclass(frozen=True)
@@ -289,7 +289,7 @@ class DbStateView:
             .limit(1)
         ).first()
         if first is not None:
-            return int(first.result["old_price_inc_gst_cents"])
+            return contract.PriceChangeSnapshot.model_validate(first.result).old_price_inc_gst_cents
         return _facts(self, sku).price_inc_gst_cents
 
     def markdown_spent_cents(self, category: str) -> int:

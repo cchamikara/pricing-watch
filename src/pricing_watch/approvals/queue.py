@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 from pricing_watch.agent.triggers import incident_context
 from pricing_watch.models import Action, Approval, Incident, Proposal
 from pricing_watch.policy.config import PolicyConfig
+from pricing_watch.policy.decide import guardrail_output
 from pricing_watch.policy.rules import DbStateView, IncidentContext, evaluate
 from pricing_watch.sim.repricer import execute
-from pricing_watch.tracing import Tracer
+from pricing_watch.tracing import Tracer, contract
 
 
 def pending(s: Session) -> list[Approval]:
@@ -43,14 +44,13 @@ def decide(
         return None
     proposal = s.get_one(Proposal, proposal_id)
     # its own trace, because the incident trace may already be closed
-    with tracer.observation(f"approval_execute:{proposal_id}", "agent", {"reviewer": reviewer}):
-        with tracer.observation(f"recheck:{proposal_id}", "guardrail", proposal.args) as obs:
+    with tracer.observation(*contract.approval_execute(proposal_id), {"reviewer": reviewer}):
+        with tracer.observation(*contract.recheck(proposal_id), proposal.args) as obs:
             incident = s.get(Incident, proposal.incident_id) if proposal.incident_id else None
             ctx = incident_context(s, incident) if incident else IncidentContext()
             recheck = evaluate(proposal.tool, proposal.args, DbStateView(s, t), ctx, config,
                                skip_approval=True)  # fmt: skip
-            obs.set_output({"decision": recheck.decision, "rule_ids": list(recheck.rule_ids),
-                            "detail": recheck.detail, "checked": recheck.checked})  # fmt: skip
+            obs.set_output(guardrail_output(recheck))
         if recheck.decision != "allowed":
             approval.note = f"{note} | not executed: {', '.join(recheck.rule_ids)} {recheck.detail}"
             s.flush()

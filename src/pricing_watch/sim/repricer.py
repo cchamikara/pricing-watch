@@ -7,7 +7,6 @@ Call it after a competitor publish; the executor writes the authoritative snapsh
 
 from collections.abc import Collection
 from datetime import datetime, timedelta
-from typing import Any
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
@@ -37,7 +36,7 @@ from pricing_watch.policy.schemas import (
 )
 from pricing_watch.sim.keywords import looks_temporary
 from pricing_watch.sim.stock import reorder
-from pricing_watch.tracing import Tracer
+from pricing_watch.tracing import Tracer, contract
 
 BAND_PCT = (98, 102)  # target range as % of the cheapest plausible competitor price
 DROP_PCT = 10  # a competitor price this far under its 7-day high is a sharp drop
@@ -96,45 +95,52 @@ def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Acti
     A proposed `notify_merchandiser` is sent here; each incident's closing notice is sent by the
     incident loop instead, so it can never be refused.
     """
-    with tracer.observation(f"execute:{proposal.tool}", "tool", proposal.args) as obs:
+    with tracer.observation(*contract.execute(proposal.tool), proposal.args) as obs:
         args = parse_action(proposal.tool, proposal.args)
         view = DbStateView(s, t)
-        result: dict[str, Any]
-        if isinstance(args, PriceChange | Promotion):
+        snapshot: contract.ExecuteSnapshot
+        if isinstance(args, PriceChange):
             spent = _charge_markdown(s, args, view, t)  # first: cost is measured from the old price
-            if isinstance(args, PriceChange):
-                product = s.get_one(Product, args.sku)
-                result = _price_facts(product) | {
-                    "old_price_inc_gst_cents": product.price_inc_gst_cents,
-                    "new_price_inc_gst_cents": args.new_price_inc_gst_cents,
-                }
-                product.price_inc_gst_cents = args.new_price_inc_gst_cents
-            else:
-                result = {"skus": {}}
-                for sku in args.skus:
-                    product = s.get_one(Product, sku)
-                    result["skus"][sku] = _price_facts(product) | {
-                        "price_inc_gst_cents": product.price_inc_gst_cents,
-                        "promo_price_inc_gst_cents": discounted(
-                            product.price_inc_gst_cents, args.discount_pct
-                        ),
-                    }
-                    s.add(ScheduledDiscount(proposal_id=proposal.id, sku=sku,
-                                            discount_pct=args.discount_pct,
-                                            start=args.start, end=args.end))  # fmt: skip
-            result["markdown_spent_cents"] = spent
+            product = s.get_one(Product, args.sku)
+            snapshot = contract.PriceChangeSnapshot(
+                cost_ex_gst_cents=product.cost_ex_gst_cents,
+                floor_price_inc_gst_cents=_floor(product),
+                old_price_inc_gst_cents=product.price_inc_gst_cents,
+                new_price_inc_gst_cents=args.new_price_inc_gst_cents, markdown_spent_cents=spent,
+            )  # fmt: skip
+            product.price_inc_gst_cents = args.new_price_inc_gst_cents
+        elif isinstance(args, Promotion):
+            spent = _charge_markdown(s, args, view, t)
+            promoted = {}
+            for sku in args.skus:
+                product = s.get_one(Product, sku)
+                promoted[sku] = contract.PromotedSku(
+                    cost_ex_gst_cents=product.cost_ex_gst_cents,
+                    floor_price_inc_gst_cents=_floor(product),
+                    price_inc_gst_cents=product.price_inc_gst_cents,
+                    promo_price_inc_gst_cents=discounted(product.price_inc_gst_cents,
+                                                         args.discount_pct),
+                )  # fmt: skip
+                s.add(ScheduledDiscount(proposal_id=proposal.id, sku=sku,
+                                        discount_pct=args.discount_pct,
+                                        start=args.start, end=args.end))  # fmt: skip
+            snapshot = contract.PromotionSnapshot(skus=promoted, markdown_spent_cents=spent)
         elif isinstance(args, Reorder):
             on_hand, inbound = view.stock(args.sku)
             order = reorder(s, args.sku, args.qty, t)
-            result = {"on_hand": on_hand, "inbound_before": inbound, "qty": args.qty,
-                      "eta": order.eta.isoformat(),
-                      "forecast_daily": view.forecast_daily(args.sku)}  # fmt: skip
+            snapshot = contract.ReorderSnapshot(
+                on_hand=on_hand, inbound_before=inbound, qty=args.qty,
+                eta=order.eta.isoformat(), forecast_daily=view.forecast_daily(args.sku),
+            )  # fmt: skip
         elif isinstance(args, RequestReview):  # the Action row is the review request
-            result = {"price_inc_gst_cents": s.get_one(Product, args.sku).price_inc_gst_cents,
-                      "on_hand": view.stock(args.sku)[0]}  # fmt: skip
+            snapshot = contract.ReviewSnapshot(
+                price_inc_gst_cents=s.get_one(Product, args.sku).price_inc_gst_cents,
+                on_hand=view.stock(args.sku)[0],
+            )
         elif isinstance(args, MatchListing):  # the model judged which product a listing is
             listing = s.get_one(CompetitorListing, args.listing_id)
-            result = {"title": listing.title, "matched_sku": args.sku, "was": listing.matched_sku}
+            snapshot = contract.MatchSnapshot(title=listing.title, matched_sku=args.sku,
+                                              was=listing.matched_sku)  # fmt: skip
             listing.matched_sku, listing.matched_by = args.sku, "model"
             listing.match_confidence = 1.0 if args.sku else 0.0
             for row in s.scalars(
@@ -149,7 +155,8 @@ def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Acti
                                 message=args.message, sent_at=t)  # fmt: skip
             s.add(note)
             s.flush()
-            result = {"notification_id": note.id}
+            snapshot = contract.NotifyOutput(notification_id=note.id)
+        result = snapshot.model_dump(mode="json")
         action = Action(proposal_id=proposal.id, tool=proposal.tool, args=proposal.args,
                         result=result, executed_at=t)  # fmt: skip
         s.add(action)
@@ -158,18 +165,13 @@ def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Acti
     return action
 
 
-def _price_facts(product: Product) -> dict[str, Any]:
-    return {
-        "cost_ex_gst_cents": product.cost_ex_gst_cents,
-        "floor_price_inc_gst_cents": floor_price(
-            product.cost_ex_gst_cents, product.margin_floor_pct
-        ),
-    }
+def _floor(product: Product) -> int:
+    return floor_price(product.cost_ex_gst_cents, product.margin_floor_pct)
 
 
 def _charge_markdown(
     s: Session, args: PriceChange | Promotion, view: DbStateView, t: datetime
-) -> dict[str, dict[str, int]]:
+) -> dict[str, contract.SpendDelta]:
     """Add the markdown cost to today's ledger; returns spend before and after, per category."""
     spent = {}
     for category, cost in markdown_cost_cents(args, view).items():
@@ -177,7 +179,7 @@ def _charge_markdown(
         if row is None:
             row = MarkdownLedger(category=category, sim_day=t.date(), spent_cents=0)
             s.add(row)
-        spent[category] = {"before": row.spent_cents, "after": row.spent_cents + cost}
+        spent[category] = contract.SpendDelta(before=row.spent_cents, after=row.spent_cents + cost)
         row.spent_cents += cost
     return spent
 
@@ -217,7 +219,7 @@ def reprice(
     text_rules, competitor prices whose note looks temporary are not followed. SKUs in defer are
     left alone: in agent mode the agent decides on sharp competitor drops."""
     view = DbStateView(s, t)
-    with tracer.observation("routine_reprice", "agent", {"sim_time": t.isoformat()}) as root:
+    with tracer.observation(*contract.ROUTINE_REPRICE, {"sim_time": t.isoformat()}) as root:
         actions = []
         for product in s.scalars(select(Product).order_by(Product.sku)):
             if product.sku in defer or (product.promo_lock_until and t < product.promo_lock_until):
@@ -242,5 +244,5 @@ def reprice(
             )  # fmt: skip
             if decision.decision == "allowed":
                 actions.append(execute(s, tracer, proposal, t))
-        root.set_output({"actions_executed": len(actions)})
+        root.set_output(contract.RepriceOutput(actions_executed=len(actions)).model_dump())
     return actions

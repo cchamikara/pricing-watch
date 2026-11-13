@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from pricing_watch.models import Approval, PolicyDecision, Proposal
 from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.rules import Decision, IncidentContext, StateView, evaluate
-from pricing_watch.tracing import Tracer
+from pricing_watch.tracing import Tracer, contract
 
 
 def propose(
@@ -28,7 +28,7 @@ def propose(
     s.add(proposal)
     s.flush()
     given = {"source": source, "tool": tool, "args": args, "reason": reason}
-    with tracer.observation(f"policy:{proposal.id}", "guardrail", given) as obs:
+    with tracer.observation(*contract.policy(proposal.id), given) as obs:
         decision = evaluate(tool, args, view, ctx, config)
         s.add(
             PolicyDecision(
@@ -43,12 +43,13 @@ def propose(
             s.add(Approval(proposal_id=proposal.id, status="pending", reviewer="",
                            decided_at=None, note=""))  # fmt: skip
         s.flush()
-        obs.set_output(
-            {
-                "decision": decision.decision,
-                "rule_ids": list(decision.rule_ids),
-                "detail": decision.detail,
-                "checked": decision.checked,
-            }
-        )
+        obs.set_output(guardrail_output(decision))
     return proposal, decision
+
+
+def guardrail_output(decision: Decision) -> dict[str, Any]:
+    """A decision as the trace contract's guardrail output, with the values the rules checked."""
+    return contract.GuardrailOutput(
+        decision=decision.decision, rule_ids=list(decision.rule_ids), detail=decision.detail,
+        checked=decision.checked,
+    ).model_dump(mode="json")  # fmt: skip

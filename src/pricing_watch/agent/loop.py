@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from pricing_watch.agent.fallback import rules_plan
-from pricing_watch.agent.model import Brief, Message, ModelError, ModelProvider
+from pricing_watch.agent.model import Brief, Message, ModelError, ModelProvider, ModelResponse
 from pricing_watch.agent.output import ModelOutput, parse_output
 from pricing_watch.agent.prompts import SYSTEM_TEMPLATE, incident_prompt
 from pricing_watch.agent.tools import CompetitorRead, ProductRead, ReadTools, StockRead
@@ -28,7 +28,7 @@ from pricing_watch.policy.rules import DbStateView
 from pricing_watch.policy.schemas import Severity
 from pricing_watch.sim.faults import Fault
 from pricing_watch.sim.repricer import execute
-from pricing_watch.tracing import Tracer
+from pricing_watch.tracing import Tracer, contract
 
 MODEL_TIMEOUT_S = 60.0
 log = logging.getLogger("pricing_watch")
@@ -59,7 +59,7 @@ def handle_incident(
     trigger = {"kind": incident.kind, "category": incident.category, "sku": incident.sku,
                "sim_time": t.isoformat()}  # fmt: skip
     out = _Outcome("action_needed", f"{incident.kind} on {scope}: the agent stopped; please check.")
-    with tracer.observation("incident", "agent", trigger) as root:
+    with tracer.observation(*contract.INCIDENT, trigger) as root:
         try:
             _work(s, tracer, model, config, incident, t, faults, out)
         except Exception as e:
@@ -71,22 +71,24 @@ def handle_incident(
         finally:
             # shortcut: assumes the session can still write; a failed flush loses the notice
             notice = {"severity": out.severity, "message": out.text}
-            with tracer.observation("notify_merchandiser", "tool", notice) as obs:
+            with tracer.observation(*contract.NOTIFY, notice) as obs:
                 note = Notification(incident_id=incident.id, severity=out.severity,
                                     message=out.text, sent_at=t)  # fmt: skip
                 s.add(note)
                 incident.closed_at, incident.answer_source = t, out.answer_source
                 s.flush()
-                obs.set_output({"notification_id": note.id})
-            root.set_attributes(
+                obs.set_output(contract.NotifyOutput(notification_id=note.id).model_dump())
+            root.set_attributes(**contract.IncidentAttributes(
                 incident_kind=incident.kind, category=incident.category, sku=incident.sku,
                 answer_source=out.answer_source, model_reachable=out.model_reachable,
                 proposals_total=out.decisions.total(),
                 proposals_refused=out.decisions["refused"],
                 proposals_pending=out.decisions["needs_approval"],
                 actions_executed=out.executed,
-            )  # fmt: skip
-            root.set_output({"severity": out.severity, "message": out.text})
+            ).model_dump())  # fmt: skip
+            root.set_output(
+                contract.IncidentOutput(severity=out.severity, message=out.text).model_dump()
+            )
             first_line = out.text.splitlines()[0][:80] if out.text else ""
             log.info("%s  %-19s %-8s %-14s %5.1fs  %-13s %-36s %s", t.strftime("%Y-%m-%d %H:%M"),
                      incident.kind, scope, out.answer_source, out.model_seconds, out.severity,
@@ -182,17 +184,21 @@ def _diagnose(
         {"role": "user",
          "content": incident_prompt(incident.kind, scope, t, incident.suspect_skus, found)},
     ]  # fmt: skip
-    with tracer.observation("diagnose", "generation", messages) as gen:
+    with tracer.observation(*contract.DIAGNOSE, messages) as gen:
         started = time.perf_counter()  # wall time for display only; the simulation never reads it
+        response: ModelResponse | None = None
         try:
             response = model.complete(messages, MODEL_TIMEOUT_S, brief)
             out.model_reachable = True
-            gen.set_attributes(model=response.model_name, usage=response.usage)
             gen.set_output(response.raw_text)
             return parse_output(response.raw_text)
         except ModelError as e:
-            gen.set_output({"error": f"{type(e).__name__}: {e}"})
+            gen.set_output(contract.GenerationError(error=f"{type(e).__name__}: {e}").model_dump())
             return None
         finally:
             out.model_seconds = round(time.perf_counter() - started, 1)
-            gen.set_attributes(latency_s=out.model_seconds)
+            gen.set_attributes(**contract.GenerationAttributes(
+                latency_s=out.model_seconds,
+                model=response.model_name if response else None,
+                usage=response.usage if response else None,
+            ).model_dump())  # fmt: skip
