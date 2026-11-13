@@ -63,11 +63,14 @@ def main(argv: list[str] | None = None) -> None:
         cmd.add_argument("--note", default="")
     langfuse = groups.add_parser("langfuse").add_subparsers(dest="command", required=True)
     langfuse.add_parser("hello", help="send a hello trace to each environment; check it arrived")
+    langfuse.add_parser("heartbeat", help="send one heartbeat (schedule it with cron)")
     push = langfuse.add_parser("push-prompts", help="make the local templates the labelled prompt")
     push.add_argument("--label", choices=["production", "ci"], required=True)
     args = parser.parse_args(argv)
 
-    if args.group == "langfuse" and args.command == "push-prompts":
+    if args.group == "langfuse" and args.command == "heartbeat":
+        _heartbeat()
+    elif args.group == "langfuse" and args.command == "push-prompts":
         _push_prompts(args.label)
     elif args.group == "langfuse":
         _langfuse_hello()
@@ -162,6 +165,15 @@ def _langfuse_tracer(
     client = langfuse_client(environment=environment, mask_otel_spans=mask)
     label = label or ("ci" if environment == "ci" else "production")
     return LangfuseTracer(client), fetch_prompts(client, label)
+
+
+def _heartbeat() -> None:
+    from pricing_watch.tracing.hello import beat
+    from pricing_watch.tracing.langfuse_tracer import langfuse_client
+
+    client = langfuse_client()
+    print(f"heartbeat {beat(client)}")
+    client.flush()
 
 
 def _push_prompts(label: str) -> None:

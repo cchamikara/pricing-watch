@@ -7,14 +7,15 @@ from langfuse import Langfuse, propagate_attributes
 
 from pricing_watch.tracing.langfuse_tracer import langfuse_client
 
-ENVIRONMENTS = ("sim", "ci", "heartbeat")
+HEARTBEAT = "heartbeat"
+ENVIRONMENTS = ("sim", "ci", HEARTBEAT)
 
 
-def send_hello(lf: Langfuse, environment: str) -> str:
-    """One `hello` span in the given environment; returns its trace id."""
+def send_hello(lf: Langfuse, environment: str, name: str = "hello") -> str:
+    """One span in the given environment; returns its trace id."""
     with (
         propagate_attributes(environment=environment),  # outside, so the root span carries it
-        lf.start_as_current_observation(as_type="span", name="hello") as span,
+        lf.start_as_current_observation(as_type="span", name=name) as span,
     ):
         span.update(output={"environment": environment})
         trace_id = lf.get_current_trace_id()
@@ -32,6 +33,12 @@ def arrived(lf: Langfuse, trace_id: str, environment: str, wait_s: float = 60) -
             return True
         time.sleep(2)
     return False
+
+
+def beat(lf: Langfuse) -> str:
+    """One heartbeat, always in `heartbeat`: never in sim or ci, where it would dilute
+    evaluator averages, whatever environment the client was made for."""
+    return send_hello(lf, HEARTBEAT, name="heartbeat")
 
 
 def check(environments: tuple[str, ...] = ENVIRONMENTS) -> dict[str, bool]:
