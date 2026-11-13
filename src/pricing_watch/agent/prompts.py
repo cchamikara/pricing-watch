@@ -9,6 +9,7 @@ pose as instructions.
 import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -51,9 +52,25 @@ def render(template: str, variables: Mapping[str, str]) -> str:
     return _PLACEHOLDER.sub(lambda m: variables[m.group(1)], template)
 
 
+@dataclass(frozen=True)
+class Prompts:
+    """The system prompt and incident template in use, and the Langfuse prompt version they
+    came from (None for the local copies, which are never linked)."""
+
+    system: str
+    incident: str
+    name: str | None = None
+    version: int | None = None
+
+
+PROMPT_NAME = "pricing-agent"  # one chat prompt in Langfuse: [system, incident]
+LOCAL_PROMPTS = Prompts(system=SYSTEM_TEMPLATE, incident=INCIDENT_TEMPLATE)
+
+
 def incident_prompt(
-    kind: str, scope: str, now: datetime, suspect: Sequence[str], reads: Sequence[BaseModel]
-) -> str:
+    kind: str, scope: str, now: datetime, suspect: Sequence[str], reads: Sequence[BaseModel],
+    template: str = INCIDENT_TEMPLATE,
+) -> str:  # fmt: skip
     """The incident prompt. Text written outside the business (supplier descriptions and notices,
     competitor notes) stays out of the JSON summary and goes into escaped, delimited blocks."""
     summary: dict[str, list[dict[str, object]]] = {}
@@ -76,7 +93,7 @@ def incident_prompt(
             notice_blocks += [_block("supplier_notice", {"scope": n.sku or n.category or "",
                                                          "sent": n.sent_at.isoformat()}, n.text)
                               for n in read.notices]  # fmt: skip
-    return render(INCIDENT_TEMPLATE, {
+    return render(template, {
         "kind": kind, "scope": scope, "now": now.isoformat(),
         "suspect": ", ".join(suspect) or "none",
         "summary": json.dumps(summary, sort_keys=True, separators=(",", ":")),

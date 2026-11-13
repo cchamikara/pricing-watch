@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from pricing_watch.agent.fallback import rules_plan
 from pricing_watch.agent.model import Brief, Message, ModelError, ModelProvider, ModelResponse
 from pricing_watch.agent.output import ModelOutput, parse_output
-from pricing_watch.agent.prompts import SYSTEM_TEMPLATE, incident_prompt
+from pricing_watch.agent.prompts import LOCAL_PROMPTS, Prompts, incident_prompt
 from pricing_watch.agent.tools import CompetitorRead, ProductRead, ReadTools, StockRead
 from pricing_watch.agent.triggers import incident_context
 from pricing_watch.models import Incident, Notification
@@ -55,6 +55,7 @@ def handle_incident(
     t: datetime,
     faults: Sequence[Fault] = (),
     run: contract.RunTrace | None = None,  # which traced run: seeds the trace id
+    prompts: Prompts = LOCAL_PROMPTS,  # from Langfuse by label, or the local templates
 ) -> Notification:
     scope = incident.sku or incident.category
     session = contract.incident_session(incident.category, incident.sku, incident.kind,
@@ -70,7 +71,7 @@ def handle_incident(
     out = _Outcome("action_needed", f"{incident.kind} on {scope}: the agent stopped; please check.")
     with tracer.observation(*contract.INCIDENT, trigger, trace=trace) as root:
         try:
-            _work(s, tracer, model, config, incident, t, faults, out)
+            _work(s, tracer, model, config, incident, t, faults, out, prompts)
         except Exception as e:
             out.severity = "action_needed"
             error = f"{type(e).__name__}: {e}"
@@ -114,6 +115,7 @@ def _work(
     t: datetime,
     faults: Sequence[Fault],
     out: _Outcome,
+    prompts: Prompts,
 ) -> None:
     reads = ReadTools(s, tracer, t, config, faults)
     found: list[BaseModel] = []
@@ -148,7 +150,7 @@ def _work(
                   candidates=tuple((c.sku, c.title) for c in listing.candidates)
                   if listing else ())  # fmt: skip
     view, ctx = DbStateView(s, t), incident_context(s, incident)
-    reply, source = _diagnose(tracer, model, incident, t, found, brief, out), "model"
+    reply, source = _diagnose(tracer, model, incident, t, found, brief, out, prompts), "model"
     if reply is None:  # the model timed out, failed or broke the schema
         reply, source = rules_plan(brief, competitors, policy, view), "rules"
         out.answer_source = "rules_fallback"
@@ -185,13 +187,15 @@ def _diagnose(
     found: list[BaseModel],
     brief: Brief,
     out: _Outcome,
+    prompts: Prompts,
 ) -> ModelOutput | None:
     """Ask the model; None means it timed out, failed or answered outside the schema."""
     scope = incident.sku or incident.category
     messages: list[Message] = [
-        {"role": "system", "content": SYSTEM_TEMPLATE},
+        {"role": "system", "content": prompts.system},
         {"role": "user",
-         "content": incident_prompt(incident.kind, scope, t, incident.suspect_skus, found)},
+         "content": incident_prompt(incident.kind, scope, t, incident.suspect_skus, found,
+                                    prompts.incident)},
     ]  # fmt: skip
     with tracer.observation(*contract.DIAGNOSE, messages) as gen:
         started = time.perf_counter()  # wall time for display only; the simulation never reads it
@@ -210,4 +214,5 @@ def _diagnose(
                 latency_s=out.model_seconds,
                 model=response.model_name if response else None,
                 usage=response.usage if response else None,
+                prompt_name=prompts.name, prompt_version=prompts.version,
             ).model_dump())  # fmt: skip

@@ -33,6 +33,10 @@ class _Handle:
                 fields["model"] = model
             if isinstance(usage := attributes.pop("usage", None), dict):
                 fields["usage_details"] = {_USAGE_KEYS.get(k, k): v for k, v in usage.items()}
+            name, version = attributes.get("prompt_name"), attributes.get("prompt_version")
+            if name and version:  # link to the prompt version; this span is the active one
+                with propagate_attributes(prompt={"name": name, "version": version}):
+                    pass
         self._span.update(metadata=attributes, **fields)
 
 

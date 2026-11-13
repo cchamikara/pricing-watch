@@ -160,6 +160,8 @@ class GenerationAttributes(BaseModel):
     latency_s: float  # wall time of the model call, success or not
     model: str | None = None  # the model that answered; None if it never did
     usage: dict[str, int] | None = None  # input_tokens, output_tokens
+    prompt_name: str | None = None  # the Langfuse prompt it used; None: the local templates
+    prompt_version: int | None = None
 
 
 # outputs

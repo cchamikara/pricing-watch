@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session
 
+from pricing_watch.agent.prompts import LOCAL_PROMPTS, PROMPT_NAME, Prompts
 from pricing_watch.approvals.queue import decide, pending
 from pricing_watch.models import PolicyDecision, Proposal, SalesTick, make_engine
 from pricing_watch.policy.config import load_policy
@@ -43,6 +44,9 @@ def main(argv: list[str] | None = None) -> None:
                      help="send the run to Langfuse; needs --env-file deploy/.env")  # fmt: skip
     run.add_argument("--run-name", default="dev",
                      help="a traced run's name; each is traced once per environment")  # fmt: skip
+    run.add_argument("--prompt-label", choices=["production", "ci"],
+                     help="with --trace, the Langfuse prompt label (default: ci in the ci "
+                          "environment, else production)")  # fmt: skip
     cmp = sim.add_parser("compare", help="run a scenario against every baseline, same seed")
     cmp.add_argument("--scenario", type=Path, required=True, help="path to a scenario YAML")
     cmp.add_argument("--seed", type=int, help="override the scenario's seed")
@@ -57,9 +61,13 @@ def main(argv: list[str] | None = None) -> None:
         cmd.add_argument("--note", default="")
     langfuse = groups.add_parser("langfuse").add_subparsers(dest="command", required=True)
     langfuse.add_parser("hello", help="send a hello trace to each environment; check it arrived")
+    push = langfuse.add_parser("push-prompts", help="make the local templates the labelled prompt")
+    push.add_argument("--label", choices=["production", "ci"], required=True)
     args = parser.parse_args(argv)
 
-    if args.group == "langfuse":
+    if args.group == "langfuse" and args.command == "push-prompts":
+        _push_prompts(args.label)
+    elif args.group == "langfuse":
         _langfuse_hello()
     elif args.group == "sim" and args.command == "compare":
         _sim_compare(args)
@@ -89,10 +97,10 @@ def _sim_run(args: argparse.Namespace) -> None:
         )
         print("sim time          kind                scope    answered by    model  severity"
               "      actions  ✓ ran ⏸ approval ✗ refused   notice")  # fmt: skip
-    tracer, trace_run = None, None
+    tracer, trace_run, prompts = None, None, LOCAL_PROMPTS
     if args.trace:
         environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT", "sim")
-        tracer = _langfuse_tracer(environment)
+        tracer, prompts = _langfuse_tracer(environment, args.prompt_label)
         trace_run = RunTrace(environment=environment, run_name=args.run_name,
                              scenario_id=config.id, seed=config.seed)  # fmt: skip
         if tracer.has_trace(trace_run.anchor()):  # the same ids again would duplicate its traces
@@ -100,7 +108,8 @@ def _sim_run(args: argparse.Namespace) -> None:
                              f"in Langfuse ({environment}); pick another --run-name, or delete "
                              "those traces first")  # fmt: skip
     try:
-        summary = run_scenario(config, tracer=tracer, db_url=db_url, trace_run=trace_run)
+        summary = run_scenario(config, tracer=tracer, db_url=db_url, trace_run=trace_run,
+                               prompts=prompts)  # fmt: skip
     finally:  # even when the run crashes: those spans explain why
         if tracer:
             tracer.flush()
@@ -139,12 +148,24 @@ def _sim_compare(args: argparse.Namespace) -> None:
               f"{sm.listings_matched_wrong}/{sm.listings_missed}")  # fmt: skip
 
 
-def _langfuse_tracer(environment: str) -> "LangfuseTracer":
+def _langfuse_tracer(environment: str, label: str | None) -> tuple["LangfuseTracer", Prompts]:
+    """The tracer, and the prompts fetched by label (the local templates if unavailable)."""
     from langfuse import Langfuse  # the SDK only when tracing
 
     from pricing_watch.tracing.langfuse_tracer import LangfuseTracer
+    from pricing_watch.tracing.prompt_store import fetch_prompts
 
-    return LangfuseTracer(Langfuse(environment=environment))
+    client = Langfuse(environment=environment)
+    label = label or ("ci" if environment == "ci" else "production")
+    return LangfuseTracer(client), fetch_prompts(client, label)
+
+
+def _push_prompts(label: str) -> None:
+    from langfuse import Langfuse
+
+    from pricing_watch.tracing.prompt_store import push_prompts
+
+    print(f"{PROMPT_NAME} v{push_prompts(Langfuse(), label)} is labelled {label}")
 
 
 def _langfuse_hello() -> None:

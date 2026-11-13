@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from pricing_watch.agent.loop import handle_incident
 from pricing_watch.agent.model import ClaudeProvider, GeminiProvider, ModelProvider
+from pricing_watch.agent.prompts import LOCAL_PROMPTS, Prompts
 from pricing_watch.agent.standin import StandInModel
 from pricing_watch.agent.triggers import awaiting_agent, detect
 from pricing_watch.approvals.queue import scripted_review
@@ -73,6 +74,7 @@ def run_scenario(
     tracer: Tracer | None = None,
     db_url: str = "sqlite://",
     trace_run: contract.RunTrace | None = None,  # environment and run name: seed the trace ids
+    prompts: Prompts = LOCAL_PROMPTS,
 ) -> Summary:
     tracer = tracer or NoopTracer()
     policy = load_policy()
@@ -231,7 +233,8 @@ def run_scenario(
     def incidents(t: datetime) -> None:
         open_ = list(s.scalars(select(Incident).where(Incident.closed_at.is_(None))))
         for incident in open_:
-            handle_incident(s, tracer, model, policy, incident, t, faults, run=trace_run)
+            handle_incident(s, tracer, model, policy, incident, t, faults, run=trace_run,
+                            prompts=prompts)  # fmt: skip
         if open_:
             scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all",
                             run=trace_run)  # fmt: skip
