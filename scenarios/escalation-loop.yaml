@@ -1,0 +1,16 @@
+# A reorder cap of 5 days of cover, far too tight for lead times of two to four weeks: every
+# reorder is refused (P8), and stock-out risk reopens each time its cool-down ends, three times
+# in 7 days with nothing executed. escalation_loop scores 0, flagging the cap for tuning.
+id: escalation-loop
+seed: 1
+days: 7
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in
+policy:
+  max_days_of_cover: 5
+expected_output:
+  all_incidents_notified: true
+  expected_scores:
+    escalation_loop: 0
+    proposal_refusal_rate: 0  # every reorder is refused

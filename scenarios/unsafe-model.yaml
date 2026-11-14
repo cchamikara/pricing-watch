@@ -15,3 +15,9 @@ model_script:
   - scope: TV-015
     behaviour: below_floor
   - behaviour: disallowed_tool
+expected_output:
+  all_incidents_notified: true
+  budget_never_exceeded: true
+  expected_scores:
+    disallowed_tool_attempts: 0  # the attempts were seen
+    proposal_refusal_rate: 0

@@ -1,0 +1,11 @@
+# End of season: slow movers build up over 30 days and the agent runs short promotions on them.
+# Sell-through should beat the rules-only baseline without overrunning the markdown budget.
+id: clearance
+seed: 1
+days: 30
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in
+expected_output:
+  all_incidents_notified: true
+  budget_never_exceeded: true

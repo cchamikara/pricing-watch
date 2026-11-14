@@ -26,7 +26,7 @@ from pricing_watch.money import floor_price
 from pricing_watch.policy.rules import IncidentContext
 from pricing_watch.sim.catalogue import PLAUSIBLE_BAND
 from pricing_watch.sim.matching import candidates
-from pricing_watch.sim.repricer import BAND_PCT, dropped_skus, latest_prices
+from pricing_watch.sim.repricer import BAND_PCT, dropped_skus, is_fresh, latest_prices
 from pricing_watch.sim.stock import forecast_daily_demand
 
 WINDOW = timedelta(days=7)
@@ -62,8 +62,9 @@ def detect(s: Session, t: datetime, observed: Mapping[str, int]) -> list[Inciden
         rev, cg = margin.get(p.category, (0, 0))
         margin[p.category] = (rev + revenue, cg + cogs)
 
-        feed = latest_prices(s, p.sku)
-        bad_feed = any(not r.plausible for r in feed)
+        published = latest_prices(s, p.sku)
+        feed = [r for r in published if is_fresh(r, t)]
+        bad_feed = any(not r.plausible for r in feed) or (published and not feed)  # or gone quiet
         if bad_feed or not PLAUSIBLE_BAND[0] * book <= seen <= PLAUSIBLE_BAND[1] * book:
             suspect.add(p.sku)
             fired.append(("suspect_feed", p.category, p.sku))
@@ -189,6 +190,17 @@ def awaiting_agent(s: Session, t: datetime, dropped: set[str]) -> set[str]:
         if not followed and last.closed_at > t - COOLDOWN:
             waiting.add(sku)
     return waiting
+
+
+def suspect_held(s: Session, t: datetime) -> set[str]:
+    """SKUs the repricer leaves alone because their data looked wrong: a suspect_feed incident
+    on them is open, or closed within the cool-down while a person reviews it."""
+    return set(s.scalars(
+        select(Incident.sku).where(
+            Incident.kind == "suspect_feed", Incident.sku.is_not(None),
+            Incident.closed_at.is_(None) | (Incident.closed_at > t - COOLDOWN),
+        )
+    ))  # fmt: skip
 
 
 def incident_context(s: Session, incident: Incident) -> IncidentContext:

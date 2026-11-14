@@ -22,3 +22,6 @@ supplier_notices:
     effective_hour: 48
     cost_change_pct: 5
     text: "TVs: cost up 5% from 3/12, orders placed before then at current pricing"
+expected_output:
+  all_incidents_notified: true
+  budget_never_exceeded: true

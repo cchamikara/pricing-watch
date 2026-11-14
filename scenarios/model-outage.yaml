@@ -10,3 +10,7 @@ model_script:
   - behaviour: timeout
     occurrence: 1  # each incident's first call per (kind, scope)
   - behaviour: invalid_json  # every later call
+expected_output:
+  all_incidents_notified: true
+  expected_scores:
+    fallback_used: 1  # every incident answered by the rules fallback

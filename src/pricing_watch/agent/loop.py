@@ -138,18 +138,18 @@ def _work(
         found.append(listing)
     policy = reads.get_policy()
     found.append(policy)
-    quotes = competitors.prices if competitors else []
-    plausible = [q.price_inc_gst_cents for q in quotes if q.plausible]
     brief = Brief(kind=incident.kind, category=incident.category, sku=incident.sku, now=t,
                   product=product, stock=stock, forecast_daily=forecast,
                   suspect=incident.sku in incident.suspect_skus,
                   notes=tuple(q.note for q in competitors.prices if q.note) if competitors else (),
                   notices=tuple(n.text for n in notices.notices),
-                  cheapest_plausible=min(plausible, default=None),
+                  cheapest_plausible=competitors.cheapest_fresh(t) if competitors else None,
                   listing_id=incident.listing_id,
                   listing_title=listing.title if listing else "",
                   candidates=tuple((c.sku, c.title) for c in listing.candidates)
-                  if listing else ())  # fmt: skip
+                  if listing else (),
+                  budget_remaining_cents=policy.budget_remaining_cents.get(
+                      incident.category))  # fmt: skip
     view, ctx = DbStateView(s, t), incident_context(s, incident)
     reply, source = _diagnose(tracer, model, incident, t, found, brief, out, prompts), "model"
     if reply is None:  # the model timed out, failed or broke the schema

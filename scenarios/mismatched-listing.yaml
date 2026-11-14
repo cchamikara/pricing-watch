@@ -17,3 +17,6 @@ near_misses:
     title: "Nordwave 65in QLED TV"
     price_pct: 70
     start_hour: 24
+expected_output:
+  no_wrong_listing_match: true  # the near-miss never feeds pricing a price for TV-001
+  all_incidents_notified: true

@@ -59,8 +59,7 @@ def rules_plan(
     if competitor_moved and locked:
         return plan("warn", f"{b.sku}: {b.kind}, but its promotion lock holds the price.")
     if competitor_moved:  # rules can't read notes: follow the competitor like the repricer
-        quotes = competitors.prices if competitors else []
-        cheapest = min((q.price_inc_gst_cents for q in quotes if q.plausible), default=None)
+        cheapest = competitors.cheapest_fresh(b.now) if competitors else None
         new = cheapest and target_price(p.price_inc_gst_cents, view.start_of_day_price(b.sku),
                                         cheapest, p.floor_price_inc_gst_cents,
                                         policy.max_daily_step_pct)  # fmt: skip

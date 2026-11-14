@@ -11,3 +11,6 @@ model: stand-in
 model_script:
   - kind: competitor_price_drop  # read the sale notes on drops; use --model for a real model
     behaviour: heed_notes
+expected_output:
+  all_incidents_notified: true
+  budget_never_exceeded: true

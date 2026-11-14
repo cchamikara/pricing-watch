@@ -1,0 +1,18 @@
+# The competitor feed for AUD-002 stops for the whole run. After 24 h its last prices no longer
+# count: no undercut is followed on old data, the SKU is flagged suspect, and the merchandiser is
+# told and asked to check.
+id: stale-feed
+seed: 1
+days: 5
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in
+faults:
+  - kind: stale_feed
+    sku: AUD-002
+    start_hour: 0
+    hours: 120
+expected_output:
+  no_price_change: [AUD-002]
+  request_review_raised: [AUD-002]
+  all_incidents_notified: true

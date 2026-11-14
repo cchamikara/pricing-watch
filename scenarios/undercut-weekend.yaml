@@ -1,0 +1,12 @@
+# Competitors run a weekend sale (5-6 December). The plain version of weekend-clearance: the
+# stand-in ignores listing notes, so the agent follows each sharp drop as far as policy allows.
+# No price may go below its floor, and the markdown budget holds.
+id: undercut-weekend
+seed: 1
+days: 7
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in
+expected_output:
+  all_incidents_notified: true
+  budget_never_exceeded: true

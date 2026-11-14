@@ -41,6 +41,7 @@ from pricing_watch.tracing import Tracer, contract
 BAND_PCT = (98, 102)  # target range as % of the cheapest plausible competitor price
 DROP_PCT = 10  # a competitor price this far under its 7-day high is a sharp drop
 DROP_WINDOW = timedelta(days=7)
+STALE_AFTER = timedelta(hours=24)  # an older competitor price no longer counts: the feed went quiet
 
 
 def target_price(
@@ -79,12 +80,18 @@ def latest_prices(s: Session, sku: str) -> list[CompetitorPrice]:
     )
 
 
-def cheapest_plausible(s: Session, sku: str, skip_temporary: bool = False) -> int | None:
-    """Lowest of each competitor's latest price for the SKU, skipping implausible ones, and with
-    skip_temporary, those whose note looks like a short sale."""
+def is_fresh(row: CompetitorPrice, t: datetime) -> bool:
+    return t - row.published_at <= STALE_AFTER
+
+
+def cheapest_plausible(
+    s: Session, sku: str, t: datetime, skip_temporary: bool = False
+) -> int | None:
+    """Lowest of each competitor's latest price for the SKU, skipping stale and implausible ones,
+    and with skip_temporary, those whose note looks like a short sale."""
     return min(
         (r.price_inc_gst_cents for r in latest_prices(s, sku)
-         if r.plausible and not (skip_temporary and looks_temporary(r.note))),
+         if r.plausible and is_fresh(r, t) and not (skip_temporary and looks_temporary(r.note))),
         default=None,
     )  # fmt: skip
 
@@ -211,6 +218,7 @@ def dropped_skus(s: Session, t: datetime) -> set[str]:
         for sku in {k.split("|", 1)[1] for k in high}
         for r in latest_prices(s, sku)
         if r.plausible
+        and is_fresh(r, t)
         and r.price_inc_gst_cents * 100 < high[f"{r.competitor_id}|{sku}"] * (100 - DROP_PCT)
     }
 
@@ -237,7 +245,7 @@ def reprice(
         for product in s.scalars(select(Product).order_by(Product.sku)):
             if product.sku in defer or (product.promo_lock_until and t < product.promo_lock_until):
                 continue
-            cheapest = cheapest_plausible(s, product.sku, skip_temporary=text_rules)
+            cheapest = cheapest_plausible(s, product.sku, t, skip_temporary=text_rules)
             if cheapest is None:
                 continue
             new_price = target_price(

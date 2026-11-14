@@ -1,0 +1,12 @@
+# Fast sellers with lead times of two to four weeks. With seed 1, AUD-017 would run out on
+# 9 December and TV-007 has the longest lead time (655 h); the agent reorders both on 4 December.
+# An order can't land inside 14 days, so what must hold is that the reorder comes first.
+id: stockout-risk
+seed: 1
+days: 14
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in
+expected_output:
+  reorder_before_stockout: [AUD-017, TV-007]
+  all_incidents_notified: true

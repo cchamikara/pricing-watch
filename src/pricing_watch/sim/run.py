@@ -13,7 +13,7 @@ from pricing_watch.agent.loop import handle_incident
 from pricing_watch.agent.model import ClaudeProvider, GeminiProvider, ModelProvider
 from pricing_watch.agent.prompts import LOCAL_PROMPTS, Prompts
 from pricing_watch.agent.standin import StandInModel
-from pricing_watch.agent.triggers import awaiting_agent, detect
+from pricing_watch.agent.triggers import awaiting_agent, detect, suspect_held
 from pricing_watch.approvals.queue import scripted_review
 from pricing_watch.clock import TickClock
 from pricing_watch.models import (
@@ -77,7 +77,7 @@ def run_scenario(
     prompts: Prompts = LOCAL_PROMPTS,
 ) -> Summary:
     tracer = tracer or NoopTracer()
-    policy = load_policy()
+    policy = config.policy_config(load_policy())
     trace_run = (trace_run or contract.RunTrace()).model_copy(
         update={"scenario_id": config.id, "seed": config.seed})  # seeds every trace id  # fmt: skip
     start_trace = contract.root_trace(trace_run, "run", 0, config.start, str(policy.policy_version))
@@ -212,7 +212,7 @@ def run_scenario(
     def repricer(t: datetime) -> None:
         if published:
             agent_decides = (
-                awaiting_agent(s, t, dropped_skus(s, t))
+                awaiting_agent(s, t, dropped_skus(s, t)) | suspect_held(s, t)
                 if config.mode == "agent" and t >= config.start  # the agent isn't on in warm-up
                 else set()
             )

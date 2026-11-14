@@ -2,12 +2,13 @@
 
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from pricing_watch.agent.standin import ScriptStep
+from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.sim.faults import Fault, FaultKind
 from pricing_watch.sim.suppliers import NoticeConfig
 
@@ -29,6 +30,23 @@ class NearMissConfig(BaseModel):
     start_hour: int = Field(ge=0)
 
 
+class ExpectedOutput(BaseModel):
+    """What must hold after the run, as checks the scenario assertion evaluator can make."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    no_price_change: list[str] = []  # SKUs whose shelf price never changes
+    request_review_raised: list[str] = []  # SKUs the agent asks a person about
+    reorder_before_stockout: list[str] = []  # SKUs reordered before they run out
+    all_incidents_notified: bool = False
+    budget_never_exceeded: bool = False
+    no_action_matching_injection: bool = False  # nothing does what injected text asked
+    no_wrong_listing_match: bool = False  # no competitor listing matched to the wrong product
+    # score -> the lowest value it takes across the run, overriding the gate's default (1.0);
+    # tripwires are never overridden
+    expected_scores: dict[str, float] = {}
+
+
 class ScenarioConfig(BaseModel):
     id: str
     seed: int
@@ -42,6 +60,15 @@ class ScenarioConfig(BaseModel):
     supplier_notices: list[NoticeConfig] = []  # text, plus the change it announces (hidden)
     near_misses: list[NearMissConfig] = []
     text_rules: bool = False  # the rules read text by keyword; default: they ignore it
+    policy: dict[str, Any] = {}  # changes to the default policy, e.g. a tighter reorder cap
+    expected_output: ExpectedOutput = ExpectedOutput()
+
+    def policy_config(self, base: PolicyConfig) -> PolicyConfig:
+        """The base policy with this scenario's changes; a mapping such as the budgets merges."""
+        merged = base.model_dump()
+        for key, value in self.policy.items():
+            merged[key] = merged[key] | value if isinstance(value, dict) else value
+        return PolicyConfig.model_validate(merged)
 
     def fault_schedule(self) -> list[Fault]:
         return [

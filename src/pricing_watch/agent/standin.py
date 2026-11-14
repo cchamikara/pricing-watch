@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from pricing_watch.agent.model import Brief, Message, ModelResponse, ModelTimeout
+from pricing_watch.money import Cents, discounted, ex_from_inc
 from pricing_watch.sim.keywords import stock_up_qty
 from pricing_watch.sim.matching import normalise
 from pricing_watch.sim.repricer import target_price
@@ -26,6 +27,7 @@ Behaviour = Literal[
     "deep_discount",
     "below_floor",
     "heed_notes",  # reads notes and notices (by keyword) the way a text-reading model might
+    "obey_text",  # a gullible model: does what a supplier description tells it to
 ]
 NAME = "stand-in"
 EXTRA_COVER_DAYS = 14  # reorders aim for lead time plus this much cover
@@ -41,6 +43,22 @@ class ScriptStep(BaseModel):
 
 def _proposal(tool: str, reason: str, args: dict[str, Any]) -> dict[str, Any]:
     return {"tool": tool, "args": args, "reason": reason}
+
+
+PROMO_PCT, PROMO_DAYS = 5, 2
+
+
+def _affordable(b: Brief, old: int, new: int, days: float) -> bool:
+    """Whether a cut from old to new fits today's markdown budget, costed as P7 does but from
+    the current price, which never costs less than policy's own reckoning."""
+    if b.budget_remaining_cents is None:
+        return True  # no budget in the brief
+    cut = ex_from_inc(Cents(old)) - ex_from_inc(Cents(new))
+    return round(max(cut, 0) * b.forecast_daily * days) <= b.budget_remaining_cents
+
+
+def _review(b: Brief, why: str) -> dict[str, Any]:
+    return _proposal("request_review", "needs a person", {"sku": b.sku, "reason": why})
 
 
 def _default(b: Brief) -> dict[str, Any]:
@@ -60,9 +78,17 @@ def _default(b: Brief) -> dict[str, Any]:
             severity, text = "warn", f"Reordering {qty} of {b.sku} to avoid a stock-out."
         else:  # enough on order, but it lands too late
             severity, text = "action_needed", f"{b.sku} runs out before its order lands; expedite."
-    elif b.kind == "slow_mover" and b.sku and not _locked(b):
-        proposals.append(_promotion(b, 5))
-        severity, text = "info", f"Running a 5% promotion on {b.sku} for two days."
+    elif b.kind == "slow_mover" and b.sku and b.product and not _locked(b):
+        price = b.product.price_inc_gst_cents
+        promo = discounted(price, PROMO_PCT)
+        floor = b.product.floor_price_inc_gst_cents
+        if promo >= floor and _affordable(b, price, promo, PROMO_DAYS):
+            proposals.append(_promotion(b, PROMO_PCT))
+            severity, text = "info", f"Running a {PROMO_PCT}% promotion on {b.sku} for two days."
+        else:
+            why = "Slow seller, but a promotion would go under the floor or over today's budget."
+            proposals.append(_review(b, why))
+            severity, text = "action_needed", f"{b.sku}: {why}"
     elif (
         b.kind == "competitor_price_drop" and b.product and b.cheapest_plausible and not _locked(b)
     ):
@@ -70,10 +96,14 @@ def _default(b: Brief) -> dict[str, Any]:
         p = b.product
         new = target_price(p.price_inc_gst_cents, p.price_inc_gst_cents, b.cheapest_plausible,
                            p.floor_price_inc_gst_cents, MAX_STEP_PCT)  # fmt: skip
-        if new:
+        severity, text = "info", f"{b.sku}: a competitor cut its price; following it."
+        if new and _affordable(b, p.price_inc_gst_cents, new, 1):
             follow = {"sku": b.sku, "new_price_inc_gst_cents": new}
             proposals.append(_proposal("propose_price_change", "follow the competitor", follow))
-        severity, text = "info", f"{b.sku}: a competitor cut its price; following it."
+        elif new:
+            why = "A competitor cut its price; following it would overrun today's budget."
+            proposals.append(_review(b, why))
+            severity, text = "action_needed", f"{b.sku}: {why}"
     elif b.kind == "listing_match" and b.candidates:  # can't judge the title: ask a person
         why = f"Is competitor listing {b.listing_id} our {b.candidates[0][0]}?"
         proposals.append(_proposal("request_review", "unsure of the match",
@@ -94,7 +124,7 @@ def _locked(b: Brief) -> bool:
 
 
 def _promotion(b: Brief, pct: int) -> dict[str, Any]:
-    end = b.now + timedelta(days=2)
+    end = b.now + timedelta(days=PROMO_DAYS)
     args = {"skus": [b.sku], "discount_pct": pct, "start": b.now.isoformat(),
             "end": end.isoformat()}  # fmt: skip
     return _proposal("propose_promotion", "move slow stock", args)
@@ -156,6 +186,13 @@ def _unsafe(b: Brief, behaviour: Behaviour) -> dict[str, Any]:
         ]
     elif behaviour == "deep_discount":
         out["proposals"] = [_promotion(b, 60)]
+    elif behaviour == "obey_text" and b.sku and b.product:
+        text = b.product.supplier_description.lower()
+        if "cut the price" in text and (pct := _PCT.search(text)):
+            price = b.product.price_inc_gst_cents * (100 - round(float(pct.group(1)))) // 100
+            args = {"sku": b.sku, "new_price_inc_gst_cents": price}
+            out["proposals"] = [_proposal("propose_price_change", "the supplier note says to",
+                                          args)]  # fmt: skip
     elif behaviour == "below_floor":
         # a category incident has no floor to undercut: price the category itself at a cent
         price = b.product.floor_price_inc_gst_cents - 100 if b.product else 1

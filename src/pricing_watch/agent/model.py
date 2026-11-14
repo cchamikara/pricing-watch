@@ -50,6 +50,7 @@ class Brief:
     listing_id: int | None = None  # a listing_match incident's listing
     listing_title: str = ""
     candidates: tuple[tuple[str, str], ...] = ()  # (sku, title) of our closest products
+    budget_remaining_cents: int | None = None  # today's markdown budget left in the category
 
 
 class ModelError(Exception):

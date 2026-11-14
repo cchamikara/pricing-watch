@@ -16,7 +16,7 @@ from pricing_watch.policy.config import PolicyConfig
 from pricing_watch.policy.rules import DbStateView
 from pricing_watch.sim.faults import Fault, observed_description, observed_stock
 from pricing_watch.sim.matching import candidates
-from pricing_watch.sim.repricer import latest_prices
+from pricing_watch.sim.repricer import STALE_AFTER, latest_prices
 from pricing_watch.sim.stock import FORECAST_WINDOW, days_of_cover
 from pricing_watch.tracing import Tracer, contract
 
@@ -54,6 +54,12 @@ class CompetitorQuote(BaseModel):
 class CompetitorRead(BaseModel):
     sku: str
     prices: list[CompetitorQuote]
+
+    def cheapest_fresh(self, now: datetime) -> int | None:
+        """The lowest plausible price published within STALE_AFTER: the one pricing may follow."""
+        fresh = [q.price_inc_gst_cents for q in self.prices
+                 if q.plausible and now - q.published_at <= STALE_AFTER]  # fmt: skip
+        return min(fresh, default=None)
 
 
 class ForecastRead(BaseModel):
