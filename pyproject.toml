@@ -79,4 +79,5 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not contract'"  # `pytest -m contract` runs them
+markers = ["contract: needs the local Langfuse stack (uv run --env-file deploy/.env pytest -m contract)"]
