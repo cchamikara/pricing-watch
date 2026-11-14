@@ -7,11 +7,12 @@ from langfuse import Langfuse, propagate_attributes
 
 from pricing_watch.tracing.langfuse_tracer import langfuse_client
 
+HELLO = "hello"  # the stack check's trace: not a run, so evaluators leave it alone
 HEARTBEAT = "heartbeat"
 ENVIRONMENTS = ("sim", "ci", HEARTBEAT)
 
 
-def send_hello(lf: Langfuse, environment: str, name: str = "hello") -> str:
+def send_hello(lf: Langfuse, environment: str, name: str = HELLO) -> str:
     """One span in the given environment; returns its trace id."""
     with (
         propagate_attributes(environment=environment),  # outside, so the root span carries it

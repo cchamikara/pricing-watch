@@ -10,12 +10,14 @@ type:
 test:
 	uv run pytest
 
-# shortcut: these modules land in M1 (sim), M5 (eval) and M6 (experiment); the targets fail until then.
 sim:
-	uv run python -m pricing_watch.sim $(ARGS)
+	uv run pricing-watch sim $(ARGS)
 
+# the evaluator worker; `make eval ARGS=--once` polls once and exits
 eval:
-	uv run python -m pricing_watch.evals $(ARGS)
+	uv run --env-file deploy/.env pricing-watch evals worker $(ARGS)
+
+# shortcut: the experiments module doesn't exist yet; this target fails until it lands
 
 experiment:
 	uv run python -m experiments $(ARGS)

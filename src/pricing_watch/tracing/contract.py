@@ -78,6 +78,7 @@ class TraceAttributes(BaseModel):
 
     scenario_id: str
     run_name: str
+    seed: int  # with the environment, run name and scenario: the run's anchor trace id
     sim_time: str
     agent_version: str
     policy_version: str
@@ -133,7 +134,7 @@ def root_trace(
         trace_seed=run._seed(root, number), session_id=session_id, tags=[run.run_name],
         trace_name=f"{run.scenario_id} · {root}",
         attributes=TraceAttributes(
-            scenario_id=run.scenario_id, run_name=run.run_name,
+            scenario_id=run.scenario_id, run_name=run.run_name, seed=run.seed,
             sim_time=t.isoformat(timespec="minutes"), agent_version=AGENT_VERSION,
             policy_version=policy_version, category=category, sku=sku,
             incident_kind=incident_kind,

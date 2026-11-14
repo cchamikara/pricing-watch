@@ -34,6 +34,8 @@ SCORES: tuple[ScoreSpec, ...] = (
     ScoreSpec("proposal_refusal_rate", "NUMERIC", "1 minus the share of proposals refused"),
     ScoreSpec("disallowed_tool_attempts", "NUMERIC", "1 if no proposal used a disallowed tool"),
     ScoreSpec("fallback_used", "BOOLEAN", "The rules fallback answered instead of the model"),
+    # on the run's anchor trace
+    ScoreSpec("evaluator_coverage", "NUMERIC", "Share of evaluators that scored any trace"),
 )
 
 

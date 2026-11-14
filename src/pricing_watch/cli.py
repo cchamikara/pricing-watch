@@ -79,9 +79,19 @@ def main(argv: list[str] | None = None) -> None:
     spans.add_argument("--timeout", type=float, default=900, help="seconds to wait")
     push = langfuse.add_parser("push-prompts", help="make the local templates the labelled prompt")
     push.add_argument("--label", choices=["production", "ci"], required=True)
+    evals = groups.add_parser("evals").add_subparsers(dest="command", required=True)
+    worker = evals.add_parser(
+        "worker", help="score finished traces in sim and ci, then keep polling"
+    )
+    worker.add_argument("--state", type=Path, default=Path(".evaluator-state.json"),
+                        help="where the worker remembers what it has scored")  # fmt: skip
+    worker.add_argument("--interval", type=float, default=30, help="seconds between polls")
+    worker.add_argument("--once", action="store_true", help="poll once and exit")
     args = parser.parse_args(argv)
 
-    if args.group == "langfuse" and args.command == "verify-guardrails":
+    if args.group == "evals":
+        _evals_worker(args.state, args.interval, args.once)
+    elif args.group == "langfuse" and args.command == "verify-guardrails":
         _verify_guardrails(args.scenario, args.run_name)
     elif args.group == "langfuse" and args.command == "verify-spans":
         _verify_spans(args.scenario, args.run_name, args.expected, args.timeout)
@@ -229,6 +239,15 @@ def _verify_spans(scenario: Path, run_name: str, expected: int, timeout_s: float
     print(f"spans sent {expected}, spans in Langfuse {seen}")
     if seen != expected:
         raise SystemExit(1)
+
+
+def _evals_worker(state: Path, interval_s: float, once: bool) -> None:
+    from pricing_watch.evals.worker import run_worker
+    from pricing_watch.tracing.langfuse_tracer import langfuse_client
+
+    logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
+    logging.getLogger("pricing_watch").setLevel(logging.INFO)
+    run_worker(langfuse_client(), state, interval_s, once)
 
 
 def _heartbeat() -> None:
