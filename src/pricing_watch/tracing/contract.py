@@ -147,7 +147,7 @@ def root_trace(
 class IncidentAttributes(BaseModel):
     incident_kind: str
     category: str
-    sku: str | None
+    sku: str | None = None  # absent for category-wide incidents: Langfuse drops None values
     answer_source: str  # "model" or "rules_fallback"
     model_reachable: bool
     proposals_total: int
@@ -249,3 +249,31 @@ ExecuteSnapshot = (
     | MatchSnapshot
     | NotifyOutput
 )
+
+
+# reading traces back: what each observation name must be, and each tool's snapshot shape
+
+_FIXED = {o.name: o for o in (RUN, INCIDENT, ROUTINE_REPRICE, DIAGNOSE, NOTIFY, GET_PRODUCT,
+                              GET_STOCK, GET_COMPETITOR_PRICES, GET_DEMAND_FORECAST,
+                              GET_SUPPLIER_NOTICES, GET_LISTING, GET_POLICY)}  # fmt: skip
+_NUMBERED = {"policy": policy(0).type, "execute": execute("").type,
+             "recheck": recheck(0).type, "approval_execute": approval_execute(0).type}  # fmt: skip
+
+
+def observation_for(name: str) -> Obs | None:
+    """The contract's observation for a name seen in a trace, or None if it isn't one."""
+    if name in _FIXED:
+        return _FIXED[name]
+    prefix, _, rest = name.partition(":")
+    kind = _NUMBERED.get(prefix)
+    return Obs(name, kind) if kind and rest else None
+
+
+EXECUTE_SNAPSHOTS: dict[str, type[BaseModel]] = {
+    "propose_price_change": PriceChangeSnapshot,
+    "propose_promotion": PromotionSnapshot,
+    "propose_reorder": ReorderSnapshot,
+    "request_review": ReviewSnapshot,
+    "match_listing": MatchSnapshot,
+    "notify_merchandiser": NotifyOutput,
+}
