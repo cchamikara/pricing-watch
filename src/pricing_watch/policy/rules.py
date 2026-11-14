@@ -220,6 +220,8 @@ def p10_approval_tier(
     return RuleResult(True)
 
 
+ALLOWLIST = "P1-allowlist"  # refuses a tool that isn't an action
+
 ORDERED_RULES: list[tuple[str, Rule]] = [
     ("P3-sku-exists", p3_sku_exists),
     ("P4-margin-floor", p4_margin_floor),
@@ -243,7 +245,7 @@ def evaluate(
     """Decide one proposal. skip_approval re-checks P1-P9 only, for an approval being executed."""
     version = str(config.policy_version)
     if tool not in ACTION_SCHEMAS:
-        return Decision("refused", ("P1-allowlist",), f"{tool!r} is not an action", {}, version)
+        return Decision("refused", (ALLOWLIST,), f"{tool!r} is not an action", {}, version)
     try:
         parsed = parse_action(tool, args)
     except ValueError as e:
