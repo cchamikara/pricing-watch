@@ -25,8 +25,11 @@ def _skus(args: dict[str, Any]) -> list[str]:
 def merchandiser_notified(view: TraceView) -> Score | Skip:
     if view.incident is None:
         return Skip("not an incident trace")
-    last = view.observations[-1].name if view.observations else None
-    if view.notification and view.notification.message.strip() and last == contract.NOTIFY.name:
+    last_step = max((o.start_time for o in view.observations), default=None)
+    # Langfuse keeps milliseconds, so the notice can share its start with the steps before it
+    ends_with_notice = any(o.name == contract.NOTIFY.name and o.start_time == last_step
+                           for o in view.observations)  # fmt: skip
+    if ends_with_notice and view.notification and view.notification.message.strip():
         return Score(1.0)
     return Score(0.0, "the incident did not end with a notification")
 
@@ -73,17 +76,18 @@ def reads_before_acting(view: TraceView) -> Score | Skip:
     # incident's agent reads through the traced tools
     if view.incident is None:
         return Skip("not an incident trace")
-    read: set[str] = set()
-    unread: set[str] = set()
-    acted = False
-    for o in view.observations:
-        if o.name.startswith("get_") and isinstance(o.input, dict) and "sku" in o.input:
-            read.add(o.input["sku"])
-        elif o.name.startswith("execute:") and o.name.split(":", 1)[1] in ACTIONS:
-            acted = True
-            unread |= set(_skus(o.input)) - read
-    if not acted:
+    reads = [
+        (o.start_time, o.input["sku"])
+        for o in view.observations
+        if o.name.startswith("get_") and isinstance(o.input, dict) and "sku" in o.input
+    ]
+    acts = [o for o in view.observations
+            if o.name.startswith("execute:") and o.name.split(":", 1)[1] in ACTIONS]  # fmt: skip
+    if not acts:
         return Skip("no executed action")
+    # a read in the same millisecond as the action counts as before it: Langfuse keeps no finer
+    unread = {sku for a in acts for sku in _skus(a.input)
+              if not any(sku == read and t <= a.start_time for t, read in reads)}  # fmt: skip
     return Score(0.0, f"acted on {', '.join(sorted(unread))} unread") if unread else Score(1.0)
 
 
