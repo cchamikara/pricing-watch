@@ -278,7 +278,7 @@ def _stock_up_before_cost_rises(
                 reason=f"supplier notice: stock up before cost up {pct}%",
             )  # fmt: skip
             if decision.decision == "allowed":
-                execute(s, tracer, proposal, t)
+                execute(s, tracer, proposal, t, policy)
 
 
 def compare(config: ScenarioConfig) -> dict[str, Summary]:

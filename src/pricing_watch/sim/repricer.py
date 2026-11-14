@@ -89,7 +89,9 @@ def cheapest_plausible(s: Session, sku: str, skip_temporary: bool = False) -> in
     )  # fmt: skip
 
 
-def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Action:
+def execute(
+    s: Session, tracer: Tracer, proposal: Proposal, t: datetime, config: PolicyConfig
+) -> Action:
     """Apply a proposal policy allowed, and record what the store looked like (S3).
 
     A proposed `notify_merchandiser` is sent here; each incident's closing notice is sent by the
@@ -100,22 +102,25 @@ def execute(s: Session, tracer: Tracer, proposal: Proposal, t: datetime) -> Acti
         view = DbStateView(s, t)
         snapshot: contract.ExecuteSnapshot
         if isinstance(args, PriceChange):
-            spent = _charge_markdown(s, args, view, t)  # first: cost is measured from the old price
+            spent = _charge_markdown(s, args, view, t, config)  # first: cut from the old price
             product = s.get_one(Product, args.sku)
             snapshot = contract.PriceChangeSnapshot(
                 cost_ex_gst_cents=product.cost_ex_gst_cents,
+                margin_floor_pct=product.margin_floor_pct,
                 floor_price_inc_gst_cents=_floor(product),
+                running_discount_pct=view.discount_pct(args.sku),
                 old_price_inc_gst_cents=product.price_inc_gst_cents,
                 new_price_inc_gst_cents=args.new_price_inc_gst_cents, markdown_spent_cents=spent,
             )  # fmt: skip
             product.price_inc_gst_cents = args.new_price_inc_gst_cents
         elif isinstance(args, Promotion):
-            spent = _charge_markdown(s, args, view, t)
+            spent = _charge_markdown(s, args, view, t, config)
             promoted = {}
             for sku in args.skus:
                 product = s.get_one(Product, sku)
                 promoted[sku] = contract.PromotedSku(
                     cost_ex_gst_cents=product.cost_ex_gst_cents,
+                    margin_floor_pct=product.margin_floor_pct,
                     floor_price_inc_gst_cents=_floor(product),
                     price_inc_gst_cents=product.price_inc_gst_cents,
                     promo_price_inc_gst_cents=discounted(product.price_inc_gst_cents,
@@ -170,7 +175,7 @@ def _floor(product: Product) -> int:
 
 
 def _charge_markdown(
-    s: Session, args: PriceChange | Promotion, view: DbStateView, t: datetime
+    s: Session, args: PriceChange | Promotion, view: DbStateView, t: datetime, config: PolicyConfig
 ) -> dict[str, contract.SpendDelta]:
     """Add the markdown cost to today's ledger; returns spend before and after, per category."""
     spent = {}
@@ -179,7 +184,11 @@ def _charge_markdown(
         if row is None:
             row = MarkdownLedger(category=category, sim_day=t.date(), spent_cents=0)
             s.add(row)
-        spent[category] = contract.SpendDelta(before=row.spent_cents, after=row.spent_cents + cost)
+        spent[category] = contract.SpendDelta(
+            before=row.spent_cents,
+            after=row.spent_cents + cost,
+            budget=config.markdown_budget_cents[category],
+        )
         row.spent_cents += cost
     return spent
 
@@ -247,6 +256,6 @@ def reprice(
                 reason=f"cheapest plausible competitor price {cheapest}",
             )  # fmt: skip
             if decision.decision == "allowed":
-                actions.append(execute(s, tracer, proposal, t))
+                actions.append(execute(s, tracer, proposal, t, config))
         root.set_output(contract.RepriceOutput(actions_executed=len(actions)).model_dump())
     return actions

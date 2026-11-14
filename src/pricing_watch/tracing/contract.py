@@ -148,6 +148,7 @@ class IncidentAttributes(BaseModel):
     incident_kind: str
     category: str
     sku: str | None = None  # absent for category-wide incidents: Langfuse drops None values
+    suspect_skus: list[str] = []  # SKUs whose data looked wrong when the incident opened
     answer_source: str  # "model" or "rules_fallback"
     model_reachable: bool
     proposals_total: int
@@ -200,11 +201,14 @@ class NotifyOutput(BaseModel):
 class SpendDelta(BaseModel):
     before: int
     after: int
+    budget: int  # the day's markdown budget for the category
 
 
 class PriceChangeSnapshot(BaseModel):
     cost_ex_gst_cents: int
+    margin_floor_pct: int
     floor_price_inc_gst_cents: int
+    running_discount_pct: int  # a promotion in force applies on top of the new price
     old_price_inc_gst_cents: int
     new_price_inc_gst_cents: int
     markdown_spent_cents: dict[str, SpendDelta]  # by category
@@ -212,6 +216,7 @@ class PriceChangeSnapshot(BaseModel):
 
 class PromotedSku(BaseModel):
     cost_ex_gst_cents: int
+    margin_floor_pct: int
     floor_price_inc_gst_cents: int
     price_inc_gst_cents: int
     promo_price_inc_gst_cents: int

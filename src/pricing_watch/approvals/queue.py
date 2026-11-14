@@ -58,7 +58,7 @@ def decide(
             approval.note = f"{note} | not executed: {', '.join(recheck.rule_ids)} {recheck.detail}"
             s.flush()
             return None
-        return execute(s, tracer, proposal, t)
+        return execute(s, tracer, proposal, t, config)
 
 
 def scripted_review(

@@ -90,7 +90,8 @@ def handle_incident(
                 obs.set_output(contract.NotifyOutput(notification_id=note.id).model_dump())
             root.set_attributes(**contract.IncidentAttributes(
                 incident_kind=incident.kind, category=incident.category, sku=incident.sku,
-                answer_source=out.answer_source, model_reachable=out.model_reachable,
+                suspect_skus=incident.suspect_skus, answer_source=out.answer_source,
+                model_reachable=out.model_reachable,
                 proposals_total=out.decisions.total(),
                 proposals_refused=out.decisions["refused"],
                 proposals_pending=out.decisions["needs_approval"],
@@ -168,7 +169,7 @@ def _work(
         shown = " ".join(p.tool.split())[:40]  # model text: no newlines, so it can't forge a line
         out.marks.append(f"{shown} {mark}{rule}")
         if decision.decision == "allowed":
-            execute(s, tracer, proposal, t)
+            execute(s, tracer, proposal, t, config)
             out.executed += 1
     if plan:  # the model's text was written before policy ran; say what really happened
         pending = out.decisions["needs_approval"]
