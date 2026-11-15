@@ -25,6 +25,7 @@ from typing import Any
 from langfuse import Evaluation
 from sqlalchemy.orm import Session
 
+from experiments.gate import gate
 from experiments.sync_dataset import DATASET, pinned
 from pricing_watch.agent.prompts import Prompts
 from pricing_watch.evals.assertions import check_scenario, lowest_scores
@@ -106,9 +107,11 @@ def make_task(
         log.info("%-20s done in %4.0fs  %4d traces  assertions %s", config.id,
                  time.monotonic() - began, len(memory.roots), held)  # fmt: skip
         return {
+            "scenario": config.id,
             "run_name": run_name,
             "trace_ids": [trace_id(r.trace.trace_seed) for r in memory.roots if r.trace],
             "lows": lows,
+            "expected_scores": config.expected_output.expected_scores,
             "assertions": asdict(checked),  # value and comment, or a skip's reason
             "agent": asdict(agent),
             "baseline": asdict(baseline),
@@ -147,6 +150,8 @@ def main() -> None:
                         help="the dataset as it stood then (default: now)")  # fmt: skip
     parser.add_argument("--scenarios", help="comma-separated scenario ids (default: all)")
     parser.add_argument("--prompt-label", choices=["production", "ci"], default="ci")
+    parser.add_argument("--gate", action="store_true",
+                        help="judge the run; exit 1 if any scenario fails")  # fmt: skip
     args = parser.parse_args()
     logging.basicConfig(format="%(asctime)s %(message)s", datefmt="%H:%M:%S", stream=sys.stdout)
     log.setLevel(logging.INFO)  # one line per scenario; the simulator's own lines stay quiet
@@ -181,6 +186,13 @@ def main() -> None:
     )  # fmt: skip
     tracer.flush()
     print(result.format())
+    if args.gate:
+        outputs: list[dict[str, Any] | None] = [r.output for r in result.item_results]
+        outputs += [None] * (len(dataset.items) - len(outputs))  # an item that raised
+        passed, table = gate(outputs)
+        print(table)
+        if not passed:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
