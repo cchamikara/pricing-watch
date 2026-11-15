@@ -1,0 +1,67 @@
+name: Nightly
+
+# The scenario catalogue on the real model, traced to Langfuse. It must pass the gate and do no
+# worse than the last accepted (successful) nightly beyond the tolerance; then it becomes the
+# accepted run. Needs repo secrets: LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL
+# (a Langfuse that GitHub can reach) and ANTHROPIC_API_KEY.
+
+# Off for now (15 Nov 2026): about 1,500 real-model calls a run cost too much, so it runs only
+# when started by hand. To turn the nightly back on, restore the schedule:
+#   schedule:
+#     - cron: "0 16 * * *"  # 02:00 in Melbourne (03:00 in daylight saving)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read  # to fetch the last accepted run's outputs
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+  LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+  LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  # no Collector on a runner: spans go straight to Langfuse's OTLP endpoint
+  OTEL_COLLECTOR_ENDPOINT: ${{ secrets.LANGFUSE_BASE_URL }}/api/public/otel/v1/traces
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Langfuse auth for span export
+        run: |
+          auth=$(printf '%s:%s' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64 -w0)
+          echo "::add-mask::$auth"
+          echo "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20$auth,x-langfuse-ingestion-version=4" >> "$GITHUB_ENV"
+      - name: Sync the scenario dataset from main
+        run: uv run python -m experiments.sync_dataset
+      # escalation-loop joins once its outcome evaluator (escalation_loop) exists
+      - name: Run the catalogue on the real model and gate it
+        run: >-
+          uv run python -m experiments.run --run-name nightly-${{ github.run_id }}
+          --model claude --skip escalation-loop --gate --outputs outputs.json
+      - name: Fetch the last accepted run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --workflow nightly.yml --branch main --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$id" ]; then gh run download "$id" --name nightly-outputs --dir previous || true; fi
+      - name: Compare with it
+        run: uv run python -m experiments.compare outputs.json previous/outputs.json
+      - name: Accept this run  # only main's runs: a branch run must not move the baseline
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-outputs
+          path: outputs.json
+          retention-days: 90

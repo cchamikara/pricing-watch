@@ -3,7 +3,7 @@
 expected_scores says otherwise), and the scenario's assertions, its must-holds and score targets,
 must hold. A scenario that produced nothing fails too.
 
-Writes a Markdown table to stdout and, in GitHub Actions, to the job summary.
+Writes a Markdown table to stdout and, in GitHub Actions, to the job summary and REPORT_FILE.
 """
 
 import os
@@ -38,9 +38,17 @@ def gate(outputs: list[dict[str, Any] | None]) -> tuple[bool, str]:
         failed = ["no output: the scenario raised"] if out is None else _failures(out)
         passed &= not failed
         name = out["scenario"] if out else "?"
+        if out and out.get("repeat", 1) > 1:
+            name += f" (repeat {out['repeat']})"
         rows.append(f"| {name} | {'FAIL' if failed else 'pass'} | {'; '.join(failed)} |")
     table = "\n".join(["| Scenario | Gate | Why |", "| --- | --- | --- |", *rows]) + "\n"
-    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(summary, "a") as f:
-            f.write(table)
+    publish(table)
     return passed, table
+
+
+def publish(markdown: str) -> None:
+    """Append to the GitHub job summary, and to REPORT_FILE (a PR comment's body), if set."""
+    for var in ("GITHUB_STEP_SUMMARY", "REPORT_FILE"):
+        if path := os.environ.get(var):
+            with open(path, "a") as f:
+                f.write(markdown + "\n")

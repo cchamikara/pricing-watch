@@ -1,4 +1,4 @@
-.PHONY: lint type test sim eval dataset experiment langfuse-env langfuse-up langfuse-down langfuse-hello
+.PHONY: lint type test sim eval gate dataset experiment langfuse-env langfuse-up langfuse-down langfuse-hello
 
 lint:
 	uv run ruff check .
@@ -16,6 +16,10 @@ sim:
 # the evaluator worker; `make eval ARGS=--once` polls once and exits
 eval:
 	uv run --env-file deploy/.env pricing-watch evals worker $(ARGS)
+
+# the PR gate, locally: every scenario in memory with the stand-in; free, no Langfuse needed
+gate:
+	uv run python -m experiments.run --offline --skip escalation-loop --gate
 
 # sync the scenario catalogue to the Langfuse dataset (writes only changed scenarios)
 dataset:
