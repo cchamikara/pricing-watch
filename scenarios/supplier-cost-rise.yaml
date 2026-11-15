@@ -3,6 +3,7 @@
 # keyword rules miss it ("cost ... up", not "cost up"); the TV notice is tidy, so they catch it.
 # 30 days, because lead times are 14-22 days and the payoff comes when the stock arrives.
 id: supplier-cost-rise
+tags: [outcome]
 seed: 1
 days: 30
 start: 2026-12-01T00:00:00

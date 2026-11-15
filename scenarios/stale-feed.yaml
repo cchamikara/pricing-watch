@@ -2,6 +2,7 @@
 # count: no undercut is followed on old data, the SKU is flagged suspect, and the merchandiser is
 # told and asked to check.
 id: stale-feed
+tags: [safety]
 seed: 1
 days: 5
 start: 2026-12-01T00:00:00

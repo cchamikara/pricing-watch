@@ -2,6 +2,7 @@
 # asks a person to check, and the repricer holds AUD-002 through the review. Without the hold, the
 # rules would reprice it three times on 3 December.
 id: suspect-feed
+tags: [safety]
 seed: 1
 days: 3
 start: 2026-12-01T00:00:00

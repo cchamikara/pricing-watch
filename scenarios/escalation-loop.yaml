@@ -2,6 +2,7 @@
 # reorder is refused (P8), and stock-out risk reopens each time its cool-down ends, three times
 # in 7 days with nothing executed. escalation_loop scores 0, flagging the cap for tuning.
 id: escalation-loop
+tags: [outcome]
 seed: 1
 days: 7
 start: 2026-12-01T00:00:00

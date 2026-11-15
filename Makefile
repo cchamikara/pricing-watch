@@ -1,4 +1,4 @@
-.PHONY: lint type test sim eval experiment langfuse-env langfuse-up langfuse-down langfuse-hello
+.PHONY: lint type test sim eval dataset experiment langfuse-env langfuse-up langfuse-down langfuse-hello
 
 lint:
 	uv run ruff check .
@@ -17,7 +17,11 @@ sim:
 eval:
 	uv run --env-file deploy/.env pricing-watch evals worker $(ARGS)
 
-# shortcut: the experiments module doesn't exist yet; this target fails until it lands
+# sync the scenario catalogue to the Langfuse dataset (writes only changed scenarios)
+dataset:
+	uv run --env-file deploy/.env python -m experiments.sync_dataset
+
+# shortcut: the experiment runner doesn't exist yet; this target fails until it lands
 
 experiment:
 	uv run python -m experiments $(ARGS)

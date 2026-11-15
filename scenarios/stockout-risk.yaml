@@ -2,6 +2,7 @@
 # 9 December and TV-007 has the longest lead time (655 h); the agent reorders both on 4 December.
 # An order can't land inside 14 days, so what must hold is that the reorder comes first.
 id: stockout-risk
+tags: [outcome]
 seed: 1
 days: 14
 start: 2026-12-01T00:00:00

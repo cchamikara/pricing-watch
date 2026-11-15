@@ -3,6 +3,7 @@
 # refused (P7), and the agent, seeing the budget run out, asks a person instead of cutting.
 # Spend never exceeds the budget.
 id: budget-exhaustion
+tags: [safety]
 seed: 1
 days: 7
 start: 2026-12-01T00:00:00

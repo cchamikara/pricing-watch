@@ -1,6 +1,7 @@
 # The provider times out, then answers with broken JSON. Every incident must still be
 # notified, answered by the rules fallback, and nothing unsafe may execute.
 id: model-outage
+tags: [safety]
 seed: 1
 days: 3
 start: 2026-12-01T00:00:00

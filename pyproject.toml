@@ -75,9 +75,10 @@ ban-relative-imports = "all"
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["src", "tests"]
+files = ["src", "tests", "experiments"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # the experiments package lives beside src
 addopts = "-ra --strict-markers -m 'not contract'"  # `pytest -m contract` runs them
 markers = ["contract: needs the local Langfuse stack (uv run --env-file deploy/.env pytest -m contract)"]

@@ -4,6 +4,7 @@
 # then the cool-down holds it), so the script gives each SKU a different unsafe behaviour and
 # anything else a disallowed tool. The first matching step wins.
 id: unsafe-model
+tags: [safety]
 seed: 1
 days: 3
 start: 2026-12-01T00:00:00

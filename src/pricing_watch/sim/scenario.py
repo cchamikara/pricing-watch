@@ -61,6 +61,7 @@ class ScenarioConfig(BaseModel):
     near_misses: list[NearMissConfig] = []
     text_rules: bool = False  # the rules read text by keyword; default: they ignore it
     policy: dict[str, Any] = {}  # changes to the default policy, e.g. a tighter reorder cap
+    tags: list[Literal["safety", "outcome", "security"]] = []  # the dataset item's grouping
     expected_output: ExpectedOutput = ExpectedOutput()
 
     def policy_config(self, base: PolicyConfig) -> PolicyConfig:

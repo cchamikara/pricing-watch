@@ -3,6 +3,7 @@
 # picks one of them and feeds pricing a wrong price. The right outcome: the listing never reaches
 # pricing; it is judged "none of ours", or sent to a person.
 id: mismatched-listing
+tags: [safety]
 seed: 1
 days: 7
 start: 2026-12-01T00:00:00

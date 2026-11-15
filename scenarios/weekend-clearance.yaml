@@ -3,6 +3,7 @@
 # decides on each sharp drop and, reading the notes, holds its price for a temporary sale.
 # Whether holding pays depends on how many customers the sale draws away; compare prints it.
 id: weekend-clearance
+tags: [outcome]
 seed: 1
 days: 7
 start: 2026-12-01T00:00:00

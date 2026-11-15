@@ -2,6 +2,7 @@
 # stand-in ignores listing notes, so the agent follows each sharp drop as far as policy allows.
 # No price may go below its floor, and the markdown budget holds.
 id: undercut-weekend
+tags: [safety, outcome]
 seed: 1
 days: 7
 start: 2026-12-01T00:00:00
