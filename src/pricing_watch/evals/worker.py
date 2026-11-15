@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from pricing_watch.evals import Score, Skip
+from pricing_watch.evals.judge import Judge
 from pricing_watch.evals.loader import ContractError, fetch_trace
 from pricing_watch.evals.proposal_safety import PROPOSAL_SAFETY
 from pricing_watch.evals.scores import ensure_score_configs, write_score
@@ -59,6 +60,7 @@ def poll(
     state: State,
     now: datetime,
     environments: tuple[str, ...] = ENVIRONMENTS,
+    judge: Judge | None = None,  # also judges each incident's notice; None: off (costs calls)
 ) -> Counter[str]:
     """Score every settled, unscored trace; returns applied and skipped counts per evaluator."""
     tally: Counter[str] = Counter()
@@ -72,7 +74,7 @@ def poll(
             if (root.trace_id in state.done or root.name in NOT_RUNS
                     or root.end_time is None or now - root.end_time < SETTLE):  # fmt: skip
                 continue
-            run = _score(client, config_ids, env, root, state, tally)
+            run = _score(client, config_ids, env, root, state, tally, judge)
             if run:
                 touched.add(run)
             state.done[root.trace_id] = [env, root.start_time.isoformat()]
@@ -87,8 +89,9 @@ def poll(
 
 
 def _score(
-    client: Any, config_ids: dict[str, str], env: str, root: Any, state: State, tally: Counter[str]
-) -> str | None:
+    client: Any, config_ids: dict[str, str], env: str, root: Any, state: State,
+    tally: Counter[str], judge: Judge | None = None,
+) -> str | None:  # fmt: skip
     """Score one trace; returns its run's key, or None if the root doesn't name its run."""
     meta = root.metadata or {}
     key = None
@@ -121,6 +124,13 @@ def _score(
         tally[f"{evaluator.name} applied"] += 1
         if run:
             run["applied"][evaluator.name] = run["applied"].get(evaluator.name, 0) + 1
+    for dimension, verdict in ((judge.run(view) or {}) if judge else {}).items():
+        assert judge is not None
+        named = Score(verdict.value, f"[{judge.name}] {verdict.comment}")  # who judged it
+        write_score(client, config_ids, trace_id=root.trace_id, evaluator=f"judge_{dimension}",
+                    version=judge.name, score=named, timestamp=root.start_time,
+                    environment=env)  # fmt: skip
+        tally[f"judge_{dimension} applied"] += 1
     return key
 
 
@@ -137,11 +147,14 @@ def _write_coverage(client: Any, config_ids: dict[str, str], run: dict[str, Any]
                 environment=run["environment"])  # fmt: skip
 
 
-def run_worker(client: Any, state_path: Path, interval_s: float, once: bool) -> None:
+def run_worker(
+    client: Any, state_path: Path, interval_s: float, once: bool, judge: Judge | None = None
+) -> None:
     config_ids = ensure_score_configs(client)
     while True:
         state = State.load(state_path)
-        tally = poll(client, config_ids, state, datetime.now(UTC))  # noqa: TID251 bounds the query
+        now = datetime.now(UTC)  # noqa: TID251 bounds the query
+        tally = poll(client, config_ids, state, now, judge=judge)
         client.flush()  # the scores are sent before the state says they were
         state.save(state_path)
         if tally:

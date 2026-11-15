@@ -213,6 +213,11 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?}
       LANGFUSE_BASE_URL: http://langfuse-web:3000
       OTEL_COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces  # required; it sends no spans
+      # judge each incident's notice: stand-in (rules, free), claude or gemini (costs a call each);
+      # unset: off
+      JUDGE_MODEL: ${JUDGE_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       UV_PROJECT_ENVIRONMENT: /venv  # not the host's .venv, which may hold another OS's builds
     volumes:
       - ..:/app:ro

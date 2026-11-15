@@ -280,7 +280,13 @@ def _evals_worker(state: Path, interval_s: float, once: bool) -> None:
 
     logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
     logging.getLogger("pricing_watch").setLevel(logging.INFO)
-    run_worker(langfuse_client(), state, interval_s, once)
+    from pricing_watch.evals.judge import make_judge
+
+    client = langfuse_client()
+    judge = make_judge(os.environ.get("JUDGE_MODEL"), client)
+    if judge:
+        logging.getLogger("pricing_watch").info("judging notices: %s", os.environ["JUDGE_MODEL"])
+    run_worker(client, state, interval_s, once, judge)
 
 
 def _heartbeat() -> None:
@@ -295,9 +301,15 @@ def _heartbeat() -> None:
 def _push_prompts(label: str) -> None:
     from langfuse import Langfuse
 
+    from pricing_watch.evals.judge import JUDGE_NAME, LOCAL_JUDGE
     from pricing_watch.tracing.prompt_store import push_prompts
 
-    print(f"{PROMPT_NAME} v{push_prompts(Langfuse(), label)} is labelled {label}")
+    client = Langfuse()
+    print(f"{PROMPT_NAME} v{push_prompts(client, label)} is labelled {label}")
+    judge = [{"role": "system", "content": LOCAL_JUDGE.system},
+             {"role": "user", "content": LOCAL_JUDGE.user}]  # fmt: skip
+    version = push_prompts(client, label, JUDGE_NAME, judge)  # type: ignore[arg-type]
+    print(f"{JUDGE_NAME} v{version} is labelled {label}")
 
 
 def _langfuse_hello() -> None:

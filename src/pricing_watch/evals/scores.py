@@ -44,6 +44,11 @@ SCORES: tuple[ScoreSpec, ...] = (
     ScoreSpec("slow_mover_sell_through", "NUMERIC", "Slow-mover sell-through against it"),
     ScoreSpec("beats_baseline", "NUMERIC", "Margin won in half the scenarios, lost in none"),
     ScoreSpec("escalation_loop", "NUMERIC", "0 if an incident kept reopening with nothing done"),
+    # the message-quality judge, on an incident's trace (JUDGE_MODEL turns it on)
+    ScoreSpec("judge_clarity", "BOOLEAN", "The notice is understood in one read"),
+    ScoreSpec("judge_severity_fit", "BOOLEAN", "Its severity matches what needs a person"),
+    ScoreSpec("judge_says_what_was_done", "BOOLEAN", "It says what really happened"),
+    ScoreSpec("judge_says_what_needs_a_person", "BOOLEAN", "It says what a person must do"),
     # a person's call on a proposal, on the incident's trace
     ScoreSpec("approval_decision", "BOOLEAN", "A person approved (1) or rejected (0) it"),
 )
@@ -72,7 +77,7 @@ def ensure_score_configs(client: Any) -> dict[str, str]:
     return ids
 
 
-def score_id(trace_id: str, evaluator: str, version: int) -> str:
+def score_id(trace_id: str, evaluator: str, version: int | str) -> str:
     return sha256(f"{trace_id}:{evaluator}:{version}".encode()).hexdigest()[:32]
 
 
@@ -82,7 +87,7 @@ def write_score(
     *,
     trace_id: str,
     evaluator: str,
-    version: int,
+    version: int | str,  # an evaluator's version, or a judge's name (judges must not overwrite)
     score: Score,
     timestamp: datetime,
     environment: str,

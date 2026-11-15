@@ -63,23 +63,27 @@ def fetch_prompts(client: Langfuse, label: str) -> Prompts:
     return fetched
 
 
-def push_prompts(client: Langfuse, label: str) -> int:
-    """Make the local templates the prompt under this label. A version with identical content
-    (under this label, or the latest) is reused, so pushing twice never makes a copy. Returns
-    the version now carrying the label."""
-    local = _content(_local_messages())
+def push_prompts(
+    client: Langfuse, label: str, name: str = PROMPT_NAME,
+    messages: Sequence[ChatMessageDict] | None = None,
+) -> int:  # fmt: skip
+    """Make the local templates the prompt under this label (the agent's, unless name and
+    messages say otherwise). A version with identical content (under this label, or the latest)
+    is reused, so pushing twice never makes a copy. Returns the version now carrying the label."""
+    messages = messages or _local_messages()
+    local = _content(messages)
     for where in (label, "latest"):
         try:
-            current = client.get_prompt(PROMPT_NAME, label=where, type="chat",
+            current = client.get_prompt(name, label=where, type="chat",
                                         cache_ttl_seconds=0, max_retries=0)  # fmt: skip
         except Exception:  # nothing under that label yet
             continue
         if _content(current.prompt) == local:
             if where != label:
-                client.update_prompt(name=PROMPT_NAME, version=current.version, new_labels=[label])
+                client.update_prompt(name=name, version=current.version, new_labels=[label])
             return int(current.version)
-    messages: list[Any] = list(_local_messages())  # the SDK's list type is a wider union
-    created = client.create_prompt(name=PROMPT_NAME, prompt=messages, labels=[label], type="chat")
+    prompt: list[Any] = list(messages)  # the SDK's list type is a wider union
+    created = client.create_prompt(name=name, prompt=prompt, labels=[label], type="chat")
     return int(created.version)
 
 
