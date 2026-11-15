@@ -38,6 +38,8 @@ SCORES: tuple[ScoreSpec, ...] = (
     ScoreSpec("evaluator_coverage", "NUMERIC", "Share of evaluators that scored any trace"),
     # per experiment item
     ScoreSpec("scenario_assertions", "NUMERIC", "1 if the scenario's expected output held"),
+    # a person's call on a proposal, on the incident's trace
+    ScoreSpec("approval_decision", "BOOLEAN", "A person approved (1) or rejected (0) it"),
 )
 
 

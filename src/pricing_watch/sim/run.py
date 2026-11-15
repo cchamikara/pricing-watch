@@ -219,6 +219,10 @@ def run_scenario(
             )
             reprice(s, tracer, t, policy, text_rules=config.text_rules, defer=agent_decides,
                     run=trace_run)  # fmt: skip
+            review(t)
+
+    def review(t: datetime) -> None:  # "person": approvals wait for the page or the CLI
+        if config.reviewer != "person":
             scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all",
                             run=trace_run)  # fmt: skip
 
@@ -237,8 +241,7 @@ def run_scenario(
             handle_incident(s, tracer, model, policy, incident, t, faults, run=trace_run,
                             prompts=prompts)  # fmt: skip
         if open_:
-            scripted_review(s, tracer, policy, t, approve=config.reviewer == "approve_all",
-                            run=trace_run)  # fmt: skip
+            review(t)
 
     run(
         TickClock(config.start - timedelta(days=WARMUP_DAYS)),

@@ -53,7 +53,8 @@ class ScenarioConfig(BaseModel):
     days: int = Field(gt=0)
     start: datetime
     faults: list[FaultConfig] = []
-    reviewer: Literal["approve_all", "reject_all"] = "approve_all"  # scripted, same tick
+    # scripted reviewers decide in the same tick; "person" leaves approvals for the approval page
+    reviewer: Literal["approve_all", "reject_all", "person"] = "approve_all"
     mode: Literal["rules", "agent"] = "rules"  # agent: the incident loop runs alongside the rules
     model: Literal["stand-in", "claude", "gemini"] = "stand-in"
     model_script: list[ScriptStep] = []  # the stand-in's script; real models ignore it

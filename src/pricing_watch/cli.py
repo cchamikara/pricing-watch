@@ -38,6 +38,8 @@ def main(argv: list[str] | None = None) -> None:
     run = sim.add_parser("run", help="run one scenario (its mode: rules, or agent too)")
     run.add_argument("--scenario", type=Path, required=True, help="path to a scenario YAML")
     run.add_argument("--seed", type=int, help="override the scenario's seed")
+    run.add_argument("--reviewer", choices=["approve_all", "reject_all", "person"],
+                     help="who decides approvals (person: the approval page)")  # fmt: skip
     run.add_argument("--db", type=Path, help="save the run to this new SQLite file")
     run.add_argument("--model", choices=["stand-in", "claude", "gemini"],
                      help="override the scenario's model (agent mode only)")  # fmt: skip
@@ -79,6 +81,12 @@ def main(argv: list[str] | None = None) -> None:
     spans.add_argument("--timeout", type=float, default=900, help="seconds to wait")
     push = langfuse.add_parser("push-prompts", help="make the local templates the labelled prompt")
     push.add_argument("--label", choices=["production", "ci"], required=True)
+    serve = groups.add_parser("serve", help="the HTTP API and approval page over a run's database")
+    serve.add_argument("--db", type=Path, required=True, help="a run database (sim run --db)")
+    serve.add_argument("--scenario", type=Path,
+                       help="the run's scenario, so approvals re-check its own policy")  # fmt: skip
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
     evals = groups.add_parser("evals").add_subparsers(dest="command", required=True)
     worker = evals.add_parser(
         "worker", help="score finished traces in sim and ci, then keep polling"
@@ -89,7 +97,9 @@ def main(argv: list[str] | None = None) -> None:
     worker.add_argument("--once", action="store_true", help="poll once and exit")
     args = parser.parse_args(argv)
 
-    if args.group == "evals":
+    if args.group == "serve":
+        _serve(args.db, args.scenario, args.host, args.port)
+    elif args.group == "evals":
         _evals_worker(args.state, args.interval, args.once)
     elif args.group == "langfuse" and args.command == "verify-guardrails":
         _verify_guardrails(args.scenario, args.run_name)
@@ -117,6 +127,8 @@ def _sim_run(args: argparse.Namespace) -> None:
     config = load_scenario(args.scenario)
     if args.seed is not None:
         config = config.model_copy(update={"seed": args.seed})
+    if args.reviewer:
+        config = config.model_copy(update={"reviewer": args.reviewer})
     if args.model:
         config = config.model_copy(update={"model": args.model})
     db_url = f"sqlite:///{args.db}" if args.db else "sqlite://"
@@ -165,6 +177,8 @@ def _sim_compare(args: argparse.Namespace) -> None:
     config = load_scenario(args.scenario)
     if args.seed is not None:
         config = config.model_copy(update={"seed": args.seed})
+    if args.reviewer:
+        config = config.model_copy(update={"reviewer": args.reviewer})
     if args.model:
         config = config.model_copy(update={"model": args.model})
     print(f"scenario {config.id}  seed {config.seed}  {config.days} days")
@@ -239,6 +253,24 @@ def _verify_spans(scenario: Path, run_name: str, expected: int, timeout_s: float
     print(f"spans sent {expected}, spans in Langfuse {seen}")
     if seen != expected:
         raise SystemExit(1)
+
+
+def _serve(db: Path, scenario: Path | None, host: str, port: int) -> None:
+    import uvicorn
+
+    from pricing_watch.api.app import create_app
+
+    environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT", "sim")
+    client, tracer = None, None
+    if os.environ.get("OTEL_COLLECTOR_ENDPOINT"):  # Langfuse is set up: trace links and scores
+        from pricing_watch.tracing.langfuse_tracer import LangfuseTracer, langfuse_client
+
+        client = langfuse_client(environment=environment)
+        tracer = LangfuseTracer(client)
+    policy = load_scenario(scenario).policy_config(load_policy()) if scenario else None
+    app = create_app(db, client, tracer=tracer, policy=policy, environment=environment,
+                     webhook_secret=os.environ.get("LANGFUSE_WEBHOOK_SECRET"))  # fmt: skip
+    uvicorn.run(app, host=host, port=port)
 
 
 def _evals_worker(state: Path, interval_s: float, once: bool) -> None:
