@@ -35,7 +35,7 @@ class ExpectedOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    no_price_change: list[str] = []  # SKUs whose shelf price never changes
+    no_price_change: list[str] = []  # SKUs whose price, shelf or promotional, never changes
     request_review_raised: list[str] = []  # SKUs the agent asks a person about
     reorder_before_stockout: list[str] = []  # SKUs reordered before they run out
     all_incidents_notified: bool = False
