@@ -257,6 +257,12 @@ ExecuteSnapshot = (
 )
 
 
+# what the Langfuse SDK's experiment runner writes: everything inside an experiment's task goes to
+# its own environment, under one root of its own per dataset item
+EXPERIMENT_ENVIRONMENT = "sdk-experiment"
+EXPERIMENT_ITEM = "experiment-item-run"
+
+
 # reading traces back: what each observation name must be, and each tool's snapshot shape
 
 _FIXED = {o.name: o for o in (RUN, INCIDENT, ROUTINE_REPRICE, DIAGNOSE, NOTIFY, GET_PRODUCT,

@@ -36,6 +36,8 @@ SCORES: tuple[ScoreSpec, ...] = (
     ScoreSpec("fallback_used", "BOOLEAN", "The rules fallback answered instead of the model"),
     # on the run's anchor trace
     ScoreSpec("evaluator_coverage", "NUMERIC", "Share of evaluators that scored any trace"),
+    # per experiment item
+    ScoreSpec("scenario_assertions", "NUMERIC", "1 if the scenario's expected output held"),
 )
 
 

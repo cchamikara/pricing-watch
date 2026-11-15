@@ -28,7 +28,9 @@ log = logging.getLogger(__name__)
 
 EVALUATORS = (*TRIPWIRES, *PROPOSAL_SAFETY)
 COVERAGE = "evaluator_coverage"
-ENVIRONMENTS = ("sim", "ci")  # never heartbeat: it would dilute every average
+# never heartbeat: it would dilute every average
+ENVIRONMENTS = ("sim", "ci", contract.EXPERIMENT_ENVIRONMENT)
+NOT_RUNS = (HELLO, contract.EXPERIMENT_ITEM)  # roots that aren't ours to score
 SETTLE = timedelta(seconds=30)
 # shortcut: a trace that ends more than an hour after a later one was scored is never seen;
 # raise it if incidents ever run that long
@@ -67,7 +69,7 @@ def poll(
                                               from_start_time=since - LOOKBACK,
                                               fields="core,basic,metadata", limit=1000)  # fmt: skip
         for root in sorted((o for page in pages for o in page.data), key=lambda o: o.start_time):
-            if (root.trace_id in state.done or root.name == HELLO
+            if (root.trace_id in state.done or root.name in NOT_RUNS
                     or root.end_time is None or now - root.end_time < SETTLE):  # fmt: skip
                 continue
             run = _score(client, config_ids, env, root, state, tally)

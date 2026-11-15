@@ -87,7 +87,8 @@ def run_scenario(
     competitors = make_competitors(config.seed, items)
     faults = config.fault_schedule()
     demand_rng = rng_for(config.seed, "demand")
-    s = Session(make_engine(db_url))
+    engine = make_engine(db_url)
+    s = Session(engine)
     for i in items:
         s.add(
             Product(
@@ -252,7 +253,10 @@ def run_scenario(
         },
     )
     s.commit()
-    return _summarise(s, config.start, opening, received, stockout_hours)
+    summary = _summarise(s, config.start, opening, received, stockout_hours)
+    s.close()
+    engine.dispose()  # close the connection here, not wherever the garbage collector runs
+    return summary
 
 
 def _stock_up_before_cost_rises(

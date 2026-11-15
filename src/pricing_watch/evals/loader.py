@@ -8,13 +8,14 @@ quietly skipped a trace it couldn't read would report a clean score for an unrea
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from langfuse import Langfuse
 from pydantic import BaseModel, ValidationError
 
-from pricing_watch.tracing import contract
+from pricing_watch.tracing import Node, contract
 
 
 class ContractError(Exception):
@@ -97,6 +98,31 @@ def load_trace(observations: Sequence[Any]) -> TraceView:
         notification=_parse(trace_id, notices[-1].name, Notice, notices[-1].input) if notices
         else None,
     )  # fmt: skip
+
+
+def from_tree(root: Node, start: datetime) -> list[Any]:
+    """An in-memory trace (InMemoryTracer) shaped as Langfuse's API returns it: upper-case
+    types, JSON text input and output, and the trace attributes in every observation's
+    metadata. Steps are a millisecond apart from start, in the order they began."""
+    if root.trace is None:
+        raise ValueError(f"{root.name!r} doesn't start its own trace")
+    tid = contract.trace_id(root.trace.trace_seed)
+    shared = root.trace.attributes.model_dump(exclude_none=True)
+    out: list[Any] = []
+
+    def walk(node: Node, parent: str | None) -> None:
+        oid = f"{len(out):016x}"
+        out.append(SimpleNamespace(
+            id=oid, trace_id=tid, parent_observation_id=parent, name=node.name,
+            type=node.type.upper(), start_time=start + timedelta(milliseconds=len(out)),
+            input=json.dumps(node.input, default=str), output=json.dumps(node.output, default=str),
+            metadata=shared | node.attributes,
+        ))  # fmt: skip
+        for child in node.children:
+            walk(child, oid)
+
+    walk(root, None)
+    return out
 
 
 def _seen(trace_id: str, o: Any) -> Seen:
