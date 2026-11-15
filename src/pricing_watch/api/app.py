@@ -63,6 +63,7 @@ def create_app(
     tracer: Tracer | None = None,
     policy: PolicyConfig | None = None,  # the run's scenario policy; None: the default policy
     environment: str = "sim",
+    ui_url: str | None = None,  # Langfuse as a browser reaches it, for links
     webhook_secret: str | None = None,
     start_run: Callable[[ScenarioConfig, str], None] | None = None,
     config_ids: dict[str, str] | None = None,
@@ -71,6 +72,14 @@ def create_app(
     tracer = tracer or NoopTracer()
     policy = policy or load_policy()
     ids = config_ids
+
+    def link(trace_id: str) -> str | None:
+        """A trace link for a browser. The client may know Langfuse by a name only Docker
+        resolves (langfuse-web), so links are rebuilt on ui_url when it is set."""
+        if client is None or not trace_id:
+            return None
+        url: str = client.get_trace_url(trace_id=trace_id)
+        return f"{ui_url.rstrip('/')}{url[url.index('/project/') :]}" if ui_url else url
 
     def session() -> Iterator[Session]:
         if not db.exists():
@@ -153,8 +162,7 @@ def create_app(
         return [{"id": i.id, "kind": i.kind, "category": i.category, "sku": i.sku,
                  "opened_at": i.opened_at.isoformat(), "closed": i.closed_at is not None,
                  "answer_source": i.answer_source,
-                 "trace_url": client.get_trace_url(trace_id=i.trace_id)
-                 if client is not None and i.trace_id else None}
+                 "trace_url": link(i.trace_id)}
                 for i in s.scalars(q)]  # fmt: skip
 
     @app.get("/approvals")
@@ -189,7 +197,7 @@ def create_app(
         rows = sorted(queue(s), key=lambda r: (r["incident_id"] is None, r["proposal_id"]))
         if source in ("agent", "rules"):
             rows = [r for r in rows if (r["incident_id"] is not None) == (source == "agent")]
-        cards = [_card(s, view, r, client, policy.auto_apply_pct) for r in rows]
+        cards = [_card(s, view, r, link, policy.auto_apply_pct) for r in rows]
         return _page(cards, t.isoformat(sep=" ", timespec="minutes"), done, source)
 
     @app.post("/scenarios/{scenario_id}/run", status_code=202)
@@ -263,7 +271,11 @@ def _product(s: Session, view: DbStateView, sku: str) -> dict[str, Any] | None:
 
 
 def _card(
-    s: Session, view: DbStateView, row: dict[str, Any], client: Any, auto_apply_pct: int
+    s: Session,
+    view: DbStateView,
+    row: dict[str, Any],
+    link: Callable[[str], str | None],
+    auto_apply_pct: int,
 ) -> dict[str, Any]:
     """What a person needs to decide: the change in dollars, against our price, floor, stock and
     the competitors, and where the proposal came from."""
@@ -302,7 +314,7 @@ def _card(
     )
     incident = s.get(Incident, row["incident_id"]) if row["incident_id"] else None
     trace_id = incident.trace_id if incident is not None else ""
-    trace = client.get_trace_url(trace_id=trace_id) if client is not None and trace_id else None
+    trace = link(trace_id)
     return row | {"change": change or tool.replace("_", " "), "market": market, "why": why,
                   "products": products,
                   "incident": incident, "trace_url": trace}  # fmt: skip

@@ -38,6 +38,11 @@ SCORES: tuple[ScoreSpec, ...] = (
     ScoreSpec("evaluator_coverage", "NUMERIC", "Share of evaluators that scored any trace"),
     # per experiment item
     ScoreSpec("scenario_assertions", "NUMERIC", "1 if the scenario's expected output held"),
+    # outcomes against the same-seed rules baseline: 1 win, 0.5 tie, 0 loss (per experiment item)
+    ScoreSpec("margin_vs_baseline", "NUMERIC", "Gross margin against the rules baseline"),
+    ScoreSpec("stockout_hours_vs_baseline", "NUMERIC", "Stock-out hours against the baseline"),
+    ScoreSpec("slow_mover_sell_through", "NUMERIC", "Slow-mover sell-through against it"),
+    ScoreSpec("beats_baseline", "NUMERIC", "Margin won in half the scenarios, lost in none"),
     # a person's call on a proposal, on the incident's trace
     ScoreSpec("approval_decision", "BOOLEAN", "A person approved (1) or rejected (0) it"),
 )

@@ -269,6 +269,7 @@ def _serve(db: Path, scenario: Path | None, host: str, port: int) -> None:
         tracer = LangfuseTracer(client)
     policy = load_scenario(scenario).policy_config(load_policy()) if scenario else None
     app = create_app(db, client, tracer=tracer, policy=policy, environment=environment,
+                     ui_url=os.environ.get("LANGFUSE_UI_URL"),
                      webhook_secret=os.environ.get("LANGFUSE_WEBHOOK_SECRET"))  # fmt: skip
     uvicorn.run(app, host=host, port=port)
 

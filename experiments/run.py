@@ -25,15 +25,23 @@ from types import SimpleNamespace
 from typing import Any
 
 from langfuse import Evaluation
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from experiments.gate import gate
 from experiments.sync_dataset import DATASET, _item, catalogue, pinned
 from pricing_watch.agent.prompts import LOCAL_PROMPTS, Prompts
+from pricing_watch.evals import Score
 from pricing_watch.evals.assertions import check_scenario, lowest_scores
 from pricing_watch.evals.loader import from_tree, load_trace
+from pricing_watch.evals.outcomes import (
+    beats_baseline,
+    margin_vs_baseline,
+    slow_mover_sell_through,
+    stockout_hours_vs_baseline,
+)
 from pricing_watch.evals.scores import SCORES, ensure_score_configs
-from pricing_watch.models import make_engine
+from pricing_watch.models import Incident, make_engine
 from pricing_watch.policy.config import load_policy
 from pricing_watch.sim.run import run_scenario
 from pricing_watch.sim.scenario import ScenarioConfig
@@ -54,7 +62,6 @@ from pricing_watch.tracing.contract import (
 
 log = logging.getLogger(__name__)
 ASSERTIONS = "scenario_assertions"
-RUN_EVALUATORS: list[Any] = []  # run-level comparisons with the baseline join here
 
 
 class _Both:
@@ -110,6 +117,9 @@ def make_task(
             engine = make_engine(db)
             with Session(engine) as s:
                 checked = check_scenario(s, config, lows)
+                opened = select(Incident.sku).where(Incident.kind == "slow_mover",
+                                                    Incident.opened_at >= config.start)  # fmt: skip
+                slow_movers = sorted({sku for sku in s.scalars(opened) if sku})
             engine.dispose()
         baseline = run_scenario(config.model_copy(update={"mode": "rules"}))
         held = getattr(checked, "value", "skipped")
@@ -124,6 +134,7 @@ def make_task(
             "lows": lows,
             "expected_scores": config.expected_output.expected_scores,
             "assertions": asdict(checked),  # value and comment, or a skip's reason
+            "slow_movers": slow_movers,
             "agent": asdict(agent),
             "baseline": asdict(baseline),
         }
@@ -146,7 +157,28 @@ def make_evaluators(config_ids: dict[str, str]) -> list[Any]:
         return [Evaluation(name=ASSERTIONS, value=result["value"], comment=result["comment"],
                            data_type="NUMERIC", config_id=config_ids[ASSERTIONS])]  # fmt: skip
 
-    return [safety, assertions]
+    def outcomes(*, output: dict[str, Any], **_: Any) -> list[Evaluation]:
+        agent, baseline = output["agent"], output["baseline"]
+        results = {"margin_vs_baseline": margin_vs_baseline(agent, baseline),
+                   "stockout_hours_vs_baseline": stockout_hours_vs_baseline(agent, baseline),
+                   "slow_mover_sell_through": slow_mover_sell_through(
+                       agent, baseline, output["slow_movers"])}  # fmt: skip
+        return [Evaluation(name=n, value=r.value, comment=r.comment, data_type="NUMERIC",
+                           config_id=config_ids[n])
+                for n, r in results.items() if isinstance(r, Score)]  # fmt: skip
+
+    return [safety, assertions, outcomes]
+
+
+def make_run_evaluators(config_ids: dict[str, str]) -> list[Any]:
+    def beats(*, item_results: list[Any], **_: Any) -> Evaluation:
+        margins = [float(e.value) for r in item_results for e in r.evaluations
+                   if e.name == "margin_vs_baseline"]  # fmt: skip
+        result = beats_baseline(margins)
+        return Evaluation(name="beats_baseline", value=result.value, comment=result.comment,
+                          data_type="NUMERIC", config_id=config_ids["beats_baseline"])  # fmt: skip
+
+    return [beats]
 
 
 def _select(items: list[Any], wanted: str | None, skip: str | None) -> list[Any]:
@@ -225,6 +257,7 @@ def _online(args: argparse.Namespace) -> list[dict[str, Any] | None]:
     label = args.prompt_label
     prompts = LOCAL_PROMPTS if label == "local" else fetch_prompts(client, label)
     outputs: list[dict[str, Any] | None] = []
+    config_ids = ensure_score_configs(client)
     for repeat in range(1, args.repeats + 1):  # one experiment run per repeat
         run_name = args.run_name if args.repeats == 1 else f"{args.run_name}-r{repeat}"
         for item in dataset.items:  # seeded trace ids: a second run under one name would merge
@@ -238,8 +271,8 @@ def _online(args: argparse.Namespace) -> list[dict[str, Any] | None]:
         result = dataset.run_experiment(
             name=DATASET, run_name=run_name, description=f"dataset as of {at.isoformat()}",
             task=make_task(tracer, environment, run_name, args.model, prompts, repeat),
-            evaluators=make_evaluators(ensure_score_configs(client)),
-            run_evaluators=RUN_EVALUATORS,
+            evaluators=make_evaluators(config_ids),
+            run_evaluators=make_run_evaluators(config_ids),
             metadata={"agent_version": AGENT_VERSION, "model": args.model or "per scenario",
                       "prompt_version": str(prompts.version or "local"),
                       "policy_version": str(load_policy().policy_version)},

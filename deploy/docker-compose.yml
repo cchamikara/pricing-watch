@@ -179,6 +179,7 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?}
       LANGFUSE_BASE_URL: http://langfuse-web:3000
       OTEL_COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces
+      LANGFUSE_UI_URL: http://localhost:3000  # trace links are for your browser, not the container
       LANGFUSE_WEBHOOK_SECRET: ${LANGFUSE_WEBHOOK_SECRET:-}  # unset: scenario runs are off
       UV_PROJECT_ENVIRONMENT: /venv
     ports:
