@@ -3,13 +3,19 @@
 1.0 when the agent wins, 0.5 within the tie tolerance, 0.0 when it loses. Three levels read
 straight onto the success criterion ("beats baseline in at least half, loses on none") and leave
 no doubt where "close enough" ends. The tolerances were fixed in the spec before looking at any
-results; change them there first. Inputs are run summaries (Summary, as dicts).
+results; change them there first. Inputs are run summaries (Summary, as dicts), except
+escalation_loop, which reads the run's incidents.
 """
 
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from pricing_watch.evals import Score, Skip
+from pricing_watch.models import Action, Incident, Proposal
 
 MARGIN_TIE_PCT = 1  # of the baseline's gross margin
 STOCKOUT_TIE_PCT, STOCKOUT_TIE_HOURS = 5, 2  # of the baseline's SKU-hours, or this many if more
@@ -51,3 +57,37 @@ def beats_baseline(margin_scores: Sequence[float]) -> Score:
     passed = bool(margin_scores) and won * 2 >= len(margin_scores) and not lost
     return Score(1.0 if passed else 0.0,
                  f"won {won}, tied {len(margin_scores) - won - lost}, lost {lost}")  # fmt: skip
+
+
+LOOP_OPENINGS, LOOP_WINDOW = 3, timedelta(days=7)
+
+
+def escalation_loop(s: Session, start: datetime, end: datetime) -> Score | Skip:
+    """0 when the same SKU and kind open three times in a row within 7 days with nothing executed
+    in any of them; 1 otherwise. A notification is telling, not doing, so it doesn't count; a
+    review request hands the problem to a person, so it does. The cool-down keeps an incident
+    from reopening for 3 days, so a loop shows as one opening per cool-down."""
+    incidents = list(s.scalars(
+        select(Incident).where(Incident.opened_at >= start, Incident.opened_at < end,
+                               Incident.sku.is_not(None))
+        .order_by(Incident.opened_at, Incident.id)
+    ))  # fmt: skip
+    if not incidents:
+        return Skip("no incidents")
+    acted = set(s.scalars(
+        select(Proposal.incident_id).join(Action, Action.proposal_id == Proposal.id)
+        .where(Action.tool != "notify_merchandiser")
+    ))  # fmt: skip
+    by_key: dict[tuple[str, str | None], list[Incident]] = {}
+    for i in incidents:
+        by_key.setdefault((i.kind, i.sku), []).append(i)
+    loops = []
+    for (kind, sku), opened in by_key.items():
+        for run in zip(*(opened[k:] for k in range(LOOP_OPENINGS)), strict=False):
+            if (all(i.id not in acted for i in run)
+                    and run[-1].opened_at - run[0].opened_at <= LOOP_WINDOW):  # fmt: skip
+                loops.append(f"{kind} on {sku} from {run[0].opened_at:%Y-%m-%d}")
+                break
+    if loops:
+        return Score(0.0, f"{len(loops)} loops: {'; '.join(loops[:5])}")
+    return Score(1.0, f"no loop in {len(incidents)} incidents")

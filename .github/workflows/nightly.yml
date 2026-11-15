@@ -45,11 +45,10 @@ jobs:
           echo "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20$auth,x-langfuse-ingestion-version=4" >> "$GITHUB_ENV"
       - name: Sync the scenario dataset from main
         run: uv run python -m experiments.sync_dataset
-      # escalation-loop joins once its outcome evaluator (escalation_loop) exists
       - name: Run the catalogue on the real model and gate it
         run: >-
           uv run python -m experiments.run --run-name nightly-${{ github.run_id }}
-          --model claude --skip escalation-loop --gate --outputs outputs.json
+          --model claude --gate --outputs outputs.json
       - name: Fetch the last accepted run
         env:
           GH_TOKEN: ${{ github.token }}

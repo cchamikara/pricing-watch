@@ -43,6 +43,7 @@ SCORES: tuple[ScoreSpec, ...] = (
     ScoreSpec("stockout_hours_vs_baseline", "NUMERIC", "Stock-out hours against the baseline"),
     ScoreSpec("slow_mover_sell_through", "NUMERIC", "Slow-mover sell-through against it"),
     ScoreSpec("beats_baseline", "NUMERIC", "Margin won in half the scenarios, lost in none"),
+    ScoreSpec("escalation_loop", "NUMERIC", "0 if an incident kept reopening with nothing done"),
     # a person's call on a proposal, on the incident's trace
     ScoreSpec("approval_decision", "BOOLEAN", "A person approved (1) or rejected (0) it"),
 )

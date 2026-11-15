@@ -50,7 +50,7 @@ def rules_plan(
         qty = math.ceil(b.forecast_daily * days) - b.stock.on_hand - b.stock.inbound_qty
         if qty <= 0:  # the trigger fired anyway: stock on order lands after the shelf empties
             why = "runs out before the stock on order arrives; a new order would land no sooner."
-            return plan("action_needed", f"{b.sku} {why} Please expedite it.")
+            return plan("action_needed", f"{b.sku} {why} Please expedite it.", review(why))
         args = {"sku": b.sku, "qty": qty}
         reorder = ProposalOut(tool="propose_reorder", args=args, reason=f"cover {days:g} days")
         return plan("warn", f"{b.sku}: reordering {qty} to avoid a stock-out.", reorder)

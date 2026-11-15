@@ -26,7 +26,6 @@ jobs:
       - run: make type
       - run: make test
       # the PR gate: every scenario in memory with the stand-in model, gated locally; needs no
-      # Langfuse and no secrets, so it runs on fork PRs too. escalation-loop joins once its
-      # outcome evaluator (escalation_loop) exists
+      # Langfuse and no secrets, so it runs on fork PRs too
       - name: Gate the scenario catalogue
-        run: uv run python -m experiments.run --offline --skip escalation-loop --gate
+        run: uv run python -m experiments.run --offline --gate

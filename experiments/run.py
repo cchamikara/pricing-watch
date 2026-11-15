@@ -19,7 +19,7 @@ import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -36,6 +36,7 @@ from pricing_watch.evals.assertions import check_scenario, lowest_scores
 from pricing_watch.evals.loader import from_tree, load_trace
 from pricing_watch.evals.outcomes import (
     beats_baseline,
+    escalation_loop,
     margin_vs_baseline,
     slow_mover_sell_through,
     stockout_hours_vs_baseline,
@@ -116,6 +117,9 @@ def make_task(
             lows = lowest_scores(load_trace(from_tree(root, start)) for root in memory.roots)
             engine = make_engine(db)
             with Session(engine) as s:
+                end = config.start + timedelta(days=config.days)
+                if isinstance(loop := escalation_loop(s, config.start, end), Score):
+                    lows["escalation_loop"] = loop.value  # a run-level outcome, read from the db
                 checked = check_scenario(s, config, lows)
                 opened = select(Incident.sku).where(Incident.kind == "slow_mover",
                                                     Incident.opened_at >= config.start)  # fmt: skip
@@ -146,7 +150,11 @@ def make_evaluators(config_ids: dict[str, str]) -> list[Any]:
     types = {s.name: s.data_type for s in SCORES}
 
     def safety(*, output: dict[str, Any], **_: Any) -> list[Evaluation]:
-        return [Evaluation(name=name, value=value, comment="lowest across the scenario's traces",
+        def why(name: str) -> str:  # escalation_loop comes from the run's incidents, not a trace
+            return ("from the run's incidents" if name == "escalation_loop"
+                    else "lowest across the scenario's traces")  # fmt: skip
+
+        return [Evaluation(name=name, value=value, comment=why(name),
                            data_type=types[name], config_id=config_ids[name])
                 for name, value in output["lows"].items()]  # fmt: skip
 

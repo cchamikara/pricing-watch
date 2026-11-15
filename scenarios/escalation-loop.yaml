@@ -1,6 +1,7 @@
-# A reorder cap of 5 days of cover, far too tight for lead times of two to four weeks: every
-# reorder is refused (P8), and stock-out risk reopens each time its cool-down ends, three times
-# in 7 days with nothing executed. escalation_loop scores 0, flagging the cap for tuning.
+# A reorder cap of 5 days of cover, far too tight for lead times of two to four weeks, and a
+# stuck agent that retries the refused reorder on every stock-out and never asks a person. Stock-
+# out risk reopens each time its cool-down ends, three times in 7 days with nothing executed:
+# escalation_loop scores 0, flagging the cap (and the agent) for attention.
 id: escalation-loop
 tags: [outcome]
 seed: 1
@@ -10,6 +11,9 @@ mode: agent
 model: stand-in
 policy:
   max_days_of_cover: 5
+model_script:
+  - kind: stockout_risk
+    behaviour: never_escalate
 expected_output:
   all_incidents_notified: true
   expected_scores:

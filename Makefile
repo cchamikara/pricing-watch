@@ -19,7 +19,7 @@ eval:
 
 # the PR gate, locally: every scenario in memory with the stand-in; free, no Langfuse needed
 gate:
-	uv run python -m experiments.run --offline --skip escalation-loop --gate
+	uv run python -m experiments.run --offline --gate
 
 # sync the scenario catalogue to the Langfuse dataset (writes only changed scenarios)
 dataset:

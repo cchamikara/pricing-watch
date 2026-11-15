@@ -53,13 +53,13 @@ jobs:
           echo "::add-mask::$auth"
           echo "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20$auth,x-langfuse-ingestion-version=4" >> "$GITHUB_ENV"
       - run: echo "## Real model, 3 runs per scenario, this branch's prompts and policy" > report.md
-      # this branch's templates (local) and policy; escalation-loop joins with its evaluator
+      # this branch's templates (local) and policy
       - name: Run on the real model and gate it
         id: run
         continue-on-error: true
         run: >-
           uv run python -m experiments.run --run-name change-${{ github.run_id }}
-          --model claude --repeats 3 --prompt-label local --skip escalation-loop
+          --model claude --repeats 3 --prompt-label local
           --gate --outputs outputs.json
       - name: Fetch the last accepted nightly
         env:
