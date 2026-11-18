@@ -25,10 +25,9 @@ gate:
 dataset:
 	uv run --env-file deploy/.env python -m experiments.sync_dataset
 
-# shortcut: the experiment runner doesn't exist yet; this target fails until it lands
-
+# an experiment run on the Langfuse dataset; e.g. make experiment ARGS="--run-name pr-1 --gate"
 experiment:
-	uv run python -m experiments $(ARGS)
+	uv run --env-file deploy/.env python -m experiments.run $(ARGS)
 
 # Self-hosted Langfuse: see deploy/docker-compose.yml
 COMPOSE = docker compose -f deploy/docker-compose.yml --env-file deploy/.env
