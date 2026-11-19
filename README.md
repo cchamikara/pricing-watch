@@ -6,7 +6,7 @@ simulated; no real shop or money is involved
 
 ## How it works
 
-![The agent's control path (simulator, triggers, agent, policy, executor, approval page) and the watching layer (Collector, Langfuse, evaluator worker, experiments)](docs/diagrams/architecture.svg)
+![The agent's control path (simulator, triggers, agent, policy, executor, approval page) and the watching layer (Collector, Langfuse, evaluator worker, experiments)](docs/diagrams/architecture.png)
 
 ## Setup
 
