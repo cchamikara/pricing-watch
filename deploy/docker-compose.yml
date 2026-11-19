@@ -1,0 +1,246 @@
+# Self-hosted Langfuse for pricing-watch: web, worker, Postgres, ClickHouse, Redis and MinIO.
+# Trimmed from Langfuse's official docker-compose.yml (no AI gateway, no optional features).
+# Only the web UI is published (http://localhost:3000); the stores stay on the Docker network.
+# Secrets come from deploy/.env (git-ignored), made by `make langfuse-env`. A missing secret
+# stops `docker compose` with an error instead of falling back to a well-known default.
+#
+#   make langfuse-env    # once: writes deploy/.env with random secrets and API keys
+#   make langfuse-up     # start; the first start pulls about 3 GB of images
+#   make langfuse-hello  # send a hello trace to each environment and check it arrived
+#   make langfuse-down   # stop (data is kept in Docker volumes)
+
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: http://localhost:3000
+  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?run make langfuse-env}@postgres:5432/postgres
+  SALT: ${SALT:?}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_PASSWORD:?}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_PASSWORD:?}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: ${REDIS_PASSWORD:?}
+
+x-depends-on: &depends-on
+  postgres: {condition: service_healthy}
+  minio: {condition: service_healthy}
+  redis: {condition: service_healthy}
+  clickhouse: {condition: service_healthy}
+
+services:
+  # the app sends spans here (http://localhost:4318); see otel-collector.yaml
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    restart: always
+    command: ["--config=/etc/otelcol/config.yaml"]
+    # shortcut: root, so it can create its queue directory on the fresh named volume; run as
+    # the image's own user with a pre-owned volume before deploying anywhere shared
+    user: "0:0"
+    environment:
+      LANGFUSE_OTLP_AUTH: ${LANGFUSE_OTLP_AUTH:?run make langfuse-env}
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - otel_queue:/var/lib/otelcol  # the on-disk sending queue: survives restarts
+    ports:
+      - 127.0.0.1:4318:4318
+    # `backend` is its only way to Langfuse, so the outage drill cuts just that; the published
+    # port lives on `edge`, the gateway network (gw_priority), so the app still reaches it
+    networks:
+      edge: {gw_priority: 1}
+      backend: {}
+
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:${LANGFUSE_IMAGE_TAG:-4.79.0}
+    restart: always
+    depends_on: *depends-on
+    environment: *langfuse-env
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:${LANGFUSE_IMAGE_TAG:-4.79.0}
+    restart: always
+    depends_on: *depends-on
+    ports:
+      - 127.0.0.1:3000:3000
+    networks: [default, backend]  # backend: the Collector's way in
+    healthcheck:  # ready only after its first-start migrations, so `up --wait` means usable
+      # the server listens on the container's hostname, not 127.0.0.1; $$ keeps it for the shell
+      test: ["CMD-SHELL", "wget -qO /dev/null http://$$HOSTNAME:3000/api/public/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?}
+      # first start only: create the org, project, API keys and a login, so nothing is clicked
+      LANGFUSE_INIT_ORG_ID: pricing-watch
+      LANGFUSE_INIT_ORG_NAME: pricing-watch
+      LANGFUSE_INIT_PROJECT_ID: pricing-watch
+      LANGFUSE_INIT_PROJECT_NAME: pricing-watch
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?}
+      LANGFUSE_INIT_USER_EMAIL: admin@pricing-watch.local
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_ADMIN_PASSWORD:?}
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:26.3.62.3
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  minio:
+    image: cgr.dev/chainguard/minio
+    restart: always
+    entrypoint: sh
+    # create the 'langfuse' bucket before starting the service
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  redis:
+    image: docker.io/redis:7
+    restart: always
+    command: --requirepass ${REDIS_PASSWORD:?} --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?}", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: docker.io/postgres:17
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # the HTTP API and approval page (http://localhost:8000) over a run database in ../runs:
+  #   uv run pricing-watch sim run --scenario ... --reviewer person --db runs/run.db
+  # APP_DB in deploy/.env picks another file there
+  app:
+    image: ghcr.io/astral-sh/uv:0.11.15-python3.12-trixie-slim
+    restart: always
+    working_dir: /app
+    command: ["uv", "run", "--frozen", "--no-dev", "pricing-watch", "serve",
+              "--db", "/runs/${APP_DB:-run.db}", "--host", "0.0.0.0"]
+    environment:
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?}
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+      OTEL_COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces
+      LANGFUSE_UI_URL: http://localhost:3000  # trace links are for your browser, not the container
+      LANGFUSE_WEBHOOK_SECRET: ${LANGFUSE_WEBHOOK_SECRET:-}  # unset: scenario runs are off
+      UV_PROJECT_ENVIRONMENT: /venv
+    ports:
+      - 127.0.0.1:8000:8000
+    volumes:
+      - ..:/app:ro
+      - ../runs:/runs  # approving writes to the run database
+      - app_venv:/venv
+      - uv_cache:/root/.cache/uv
+    networks: [backend]  # langfuse-web and the Collector
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request as u; u.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    depends_on:
+      langfuse-web: {condition: service_healthy}
+
+  # scores finished sim and ci traces (src/pricing_watch/evals/worker.py) and keeps polling;
+  # it remembers what it scored on the evaluator_state volume
+  evaluator:
+    image: ghcr.io/astral-sh/uv:0.11.15-python3.12-trixie-slim
+    restart: always
+    working_dir: /app
+    command: ["uv", "run", "--frozen", "--no-dev", "pricing-watch",
+              "evals", "worker", "--state", "/state/evaluator.json"]
+    environment:
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?}
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+      OTEL_COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces  # required; it sends no spans
+      # judge each incident's notice: stand-in (rules, free), claude or gemini (costs a call each);
+      # unset: off
+      JUDGE_MODEL: ${JUDGE_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      UV_PROJECT_ENVIRONMENT: /venv  # not the host's .venv, which may hold another OS's builds
+    volumes:
+      - ..:/app:ro
+      - evaluator_state:/state
+      - evaluator_venv:/venv
+      - uv_cache:/root/.cache/uv
+    # langfuse-web listens only on its hostname's address, which is on `backend`
+    networks: [backend]
+    depends_on:
+      langfuse-web: {condition: service_healthy}
+
+networks:
+  edge:
+  backend:
+
+volumes:
+  otel_queue:
+  postgres_data:
+  clickhouse_data:
+  clickhouse_logs:
+  minio_data:
+  redis_data:
+  evaluator_state:
+  evaluator_venv:
+  uv_cache:
+  app_venv:

@@ -1,0 +1,8 @@
+# Demo: the agent changes the price customers pay. With seed 1, TV-018 sells slowly from
+# 9 December; the stand-in's default plan runs a 5% promotion for two days, which policy allows.
+id: slow-mover-promo
+seed: 1
+days: 10
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in

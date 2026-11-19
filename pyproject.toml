@@ -1,16 +1,38 @@
 [project]
 name = "pricing-watch"
 version = "0.1.0"
-description = "An autonomous pricing agent for a simulated lighting store, plus the layer that watches, scores and constrains it."
+description = "An autonomous pricing agent for a simulated home entertainment retailer, plus the layer that watches, scores and constrains it."
 readme = "README.md"
 authors = [
     { name = "Chamal", email = "chamalchamikara@gmail.com" }
 ]
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "anthropic>=2.6.0",
+    "fastapi>=0.163.0",
+    "google-genai>=3.1.0",
+    "httpx2>=2.16.0",
+    "langfuse==5.2.0",
+    "numpy>=2.5.4",
+    "pydantic>=2.14.3",
+    "python-multipart>=0.0.33",
+    "pyyaml>=6.0.3",
+    "sqlalchemy>=2.1.8",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+pricing-watch = "pricing_watch.cli:main"
 
 [dependency-groups]
-dev = ["ruff", "mypy", "pytest", "hypothesis", "pre-commit"]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "hypothesis",
+    "pre-commit",
+    "types-pyyaml>=6.0.12.20261103",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.15,<0.12.0"]
@@ -25,13 +47,41 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "TID"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
-# banned-api entries (wall clock, random) arrive with M0.4.
+
+# Simulation code must read time from the injected SimClock and randomness from pricing_watch.rng.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"datetime.datetime.now".msg = "Use the injected SimClock."
+"datetime.datetime.utcnow".msg = "Use the injected SimClock."
+"datetime.datetime.today".msg = "Use the injected SimClock."
+"datetime.date.today".msg = "Use the injected SimClock."
+"time.time".msg = "Use the injected SimClock."
+"time.time_ns".msg = "Use the injected SimClock."
+"random".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.seed".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.default_rng".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.random".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.rand".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.randn".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.randint".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.normal".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.uniform".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.choice".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.shuffle".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.permutation".msg = "Use pricing_watch.rng.rng_for."
+"numpy.random.poisson".msg = "Use pricing_watch.rng.rng_for."
+"uuid.uuid4".msg = "Derive IDs from scenario and seed."
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["TID251"]
+"src/pricing_watch/rng.py" = ["TID251"]
 
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["src", "tests"]
+files = ["src", "tests", "experiments"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+pythonpath = ["."]  # the experiments package lives beside src
+addopts = "-ra --strict-markers -m 'not contract'"  # `pytest -m contract` runs them
+markers = ["contract: needs the local Langfuse stack (uv run --env-file deploy/.env pytest -m contract)"]

@@ -1,0 +1,20 @@
+# Policy thresholds. Bump policy_version on every change: it is stamped on every decision.
+policy_version: 2026-11-08
+
+# P10: a single price change larger than this needs approval.
+auto_apply_pct: 5
+
+# P6: cumulative change against the start-of-day price may not exceed this. P6 and P10 differ:
+# P10 looks at one change, P6 at the day's total, so small steps can't add up past the cap.
+max_daily_step_pct: 20
+
+# P8: a reorder may not push cover (on hand + inbound, in days of forecast demand) above this.
+max_days_of_cover: 60
+
+# P7: daily markdown budget per category. Markdown cost = (start-of-day price - new price) ex GST
+# x forecast units over the window the lower price applies, in cents. Both promotions and price
+# decreases count against it.
+markdown_budget_cents:
+  tvs: 200000
+  audio: 100000
+  accessories: 50000

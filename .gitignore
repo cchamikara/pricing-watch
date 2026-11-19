@@ -12,3 +12,9 @@ wheels/
 .pytest_cache/
 .ruff_cache/
 .hypothesis/
+.idea/
+
+# local secrets for the Langfuse stack
+deploy/.env
+# the evaluator worker's local state (what it has scored)
+.evaluator-state.json

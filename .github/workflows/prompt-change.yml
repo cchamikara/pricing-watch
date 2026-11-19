@@ -1,0 +1,81 @@
+name: Prompt or policy change
+
+# A change to the prompts or the policy runs the catalogue on the real model with this branch's
+# templates and policy, 3 runs per scenario on its own seed (the real model answers differently
+# each time; the scenarios hold only in their own seed), gates it, compares it with the last accepted
+# nightly, and posts both tables on the PR. Needs the same secrets as the nightly; fork PRs get
+# no secrets, so they skip it.
+
+# Off for now (15 Nov 2026): about 4,600 real-model calls a run cost too much, so it runs only
+# when started by hand on a branch (then it reports in the job summary instead of a PR comment).
+# To turn it back on for PRs, restore:
+#   pull_request:
+#     paths:
+#       - src/pricing_watch/agent/templates/**
+#       - src/pricing_watch/policy/config.yaml
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read  # to fetch the last accepted nightly
+  pull-requests: write  # to comment
+
+concurrency:
+  group: prompt-change-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+  LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+  LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  OTEL_COLLECTOR_ENDPOINT: ${{ secrets.LANGFUSE_BASE_URL }}/api/public/otel/v1/traces
+  REPORT_FILE: report.md  # the gate and the comparison append their tables: the PR comment
+
+jobs:
+  real-model:
+    # a PR from a fork gets no secrets; a run started by hand is always this repo's
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Langfuse auth for span export
+        run: |
+          auth=$(printf '%s:%s' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64 -w0)
+          echo "::add-mask::$auth"
+          echo "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20$auth,x-langfuse-ingestion-version=4" >> "$GITHUB_ENV"
+      - run: echo "## Real model, 3 runs per scenario, this branch's prompts and policy" > report.md
+      # this branch's templates (local) and policy
+      - name: Run on the real model and gate it
+        id: run
+        continue-on-error: true
+        run: >-
+          uv run python -m experiments.run --run-name change-${{ github.run_id }}
+          --model claude --repeats 3 --prompt-label local
+          --gate --outputs outputs.json
+      - name: Fetch the last accepted nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --workflow nightly.yml --branch main --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$id" ]; then gh run download "$id" --name nightly-outputs --dir previous || true; fi
+      - name: Compare with it
+        id: compare
+        continue-on-error: true
+        run: uv run python -m experiments.compare outputs.json previous/outputs.json
+      - name: Comment on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.number }} --body-file report.md
+      - name: Fail if the gate or the comparison failed
+        if: steps.run.outcome == 'failure' || steps.compare.outcome == 'failure'
+        run: exit 1

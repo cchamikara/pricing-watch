@@ -1,0 +1,28 @@
+# Suppliers announce cost rises two days ahead, only in text. Stock ordered before a rise keeps
+# the old cost, so reading the notice and stocking up pays. The audio notice is worded so the
+# keyword rules miss it ("cost ... up", not "cost up"); the TV notice is tidy, so they catch it.
+# 30 days, because lead times are 14-22 days and the payoff comes when the stock arrives.
+id: supplier-cost-rise
+tags: [outcome]
+seed: 1
+days: 30
+start: 2026-12-01T00:00:00
+mode: agent
+model: stand-in
+model_script:
+  - kind: supplier_notice  # read the notices; everything else as an agent that ignores text
+    behaviour: heed_notes
+supplier_notices:
+  - category: audio
+    sent_hour: 0
+    effective_hour: 48
+    cost_change_pct: 8
+    text: "Pls note cost on audio range up approx 8% from Thu 3/12"
+  - category: tvs
+    sent_hour: 0
+    effective_hour: 48
+    cost_change_pct: 5
+    text: "TVs: cost up 5% from 3/12, orders placed before then at current pricing"
+expected_output:
+  all_incidents_notified: true
+  budget_never_exceeded: true

@@ -1,0 +1,5 @@
+id: smoke-7d
+seed: 1
+days: 7
+start: 2026-12-01T00:00:00
+faults: []
