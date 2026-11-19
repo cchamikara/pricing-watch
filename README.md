@@ -44,3 +44,30 @@ uv run python -m experiments.multi_seed --seeds 1,2,3
 uv run pricing-watch sim run --scenario scenarios/undercut-weekend.yaml --reviewer person \
     --db runs/run.db
 ```
+
+## Commands
+
+**`pricing-watch` CLI**
+
+| Command | What it does |
+| --- | --- |
+| `sim run --scenario FILE` | run one scenario; `--model stand-in\|gemini\|claude`, `--seed`, `--trace --run-name NAME`, `--reviewer approve_all\|reject_all\|person`, `--db FILE`, `--prompt-label`, `--content-off` (mask text in traces) |
+| `sim compare --scenario FILE` | run a scenario against every baseline on the same seed |
+| `approvals list --db FILE` | list proposals waiting for a person |
+| `approvals approve ID --db FILE [--note TEXT]` | approve one (also `approvals reject`) |
+| `serve --db FILE [--scenario FILE]` | the API and approval page over a run's database |
+| `evals worker [--once] [--interval S]` | score finished traces, then keep polling |
+| `langfuse push-prompts --label production\|ci` | make the local prompt templates the labelled prompt |
+| `langfuse hello` / `heartbeat` | check the pipeline end to end / send one heartbeat |
+| `langfuse verify-guardrails` / `verify-spans` | check Langfuse holds exactly what a run sent |
+
+**Experiments** (`uv run python -m experiments.NAME`)
+
+| Command | What it does |
+| --- | --- |
+| `run [--offline] [--gate] [--model M] [--repeats N] [--prompt-label L]` | run the dataset, score it, optionally gate |
+| `sync_dataset` | the same as `make dataset` |
+| `compare NOW.json BEFORE.json [--tolerance 0.05]` | fail if any scenario did worse than the last accepted run (outputs from `run --outputs`) |
+| `multi_seed --seeds 1,2,3` | the agent against its rules baseline over several seeds |
+| `label_queue --runs A,B [--size 50]` | fill the Langfuse queue with notices to label by hand |
+| `calibrate [--judge stand-in\|gemini\|claude]` | the judge's agreement with your labels (Cohen's κ) |
